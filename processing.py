@@ -54,10 +54,12 @@ def particle_detector(image, thresh_rule, std_mult):
     x = np.array([1,1,1])/3
     kernel = x.reshape((1, -1)) * x.reshape((-1, 1))
 
-    image = convolve2d(image, kernel)
+    #image = convolve2d(image, kernel)
     #image = convolve2d(image.T, kernel)
 
     potential_centers = comp(image, op(np.mean(image), std_mult * np.std(image)))
+
+    potential_centers = np.logical_or(image > np.mean(image) + std_mult * np.std(image), image < np.mean(image) - std_mult * np.std(image))
 
     ### Detect contours
     cnts, hier = cv2.findContours(potential_centers.astype(np.uint8) * 255, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)

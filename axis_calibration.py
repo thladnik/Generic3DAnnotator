@@ -5,17 +5,19 @@ import numpy as np
 
 import gv
 
+axes_markers = dict()
+axes_order = ['xmin', 'xmax', 'ymin', 'ymax']
 
 ################################################################
 ### Axes calibration
 
 def start_axes_calibration():
-    global set_axes, axes_order, gb_calib
+    global axes_order, gb_calib
 
     gv.w.viewer.slider.setEnabled(False)
-    gb_calib.le_axes_status.setText('Set axis {}'.format(axes_order[0]))
+    gv.w.gb_calib.le_axes_status.setText('Set axis {}'.format(axes_order[0]))
 
-    set_axes = True
+    gv.set_axes = True
 
 def set_axis_point(ev):
     global set_axes, axes_order, gb_calib
@@ -27,6 +29,7 @@ def set_axis_point(ev):
     pos = gv.w.viewer.view.mapSceneToView(ev.scenePos())
     x = pos.x()
     y = pos.y()
+    print(pos)
 
     if x > gv.f[gv.KEY_ORIGINAL].shape[1] or x < 0.0 or y > gv.f[gv.KEY_ORIGINAL].shape[2] or y < 0.0:
         print('Position [{}/{}] out of bounds.'.format(x,y))
@@ -88,9 +91,9 @@ def set_axis_point(ev):
     ### If last point was calibrated: ask for scale, update all and exit calibration
     if pidx == len(axes_order)-1:
         print('Calibration completed for frame {}'.format(fidx))
-        set_axes = False
+        gv.set_axes = False
 
-        gb_calib.le_axes_status.setText('Set scale')
+        gv.w.gb_calib.le_axes_status.setText('Set scale')
         update_axes_marker()
 
         dialog = QtWidgets.QDialog(gv.w)
@@ -122,15 +125,14 @@ def set_axis_point(ev):
         scale_dset[idx,:] = [dialog.xmin.value(), dialog.xmax.value(), dialog.ymin.value(), dialog.ymax.value()]
 
         gv.w.viewer.slider.setEnabled(True)
-        gb_calib.le_axes_status.setText('')
+        gv.w.gb_calib.le_axes_status.setText('')
         update_axes_table()
         return
 
-    gb_calib.le_axes_status.setText('Set axis {}'.format(axes_order[pidx + 1]))
+    gv.w.gb_calib.le_axes_status.setText('Set axis {}'.format(axes_order[pidx + 1]))
 
 
 def update_axes_table():
-    global gb_calib
 
     gv.w.gb_calib.axes_table.clear()
     gv.w.gb_calib.axes_table.setColumnCount(0)
@@ -158,9 +160,6 @@ def update_axes_table():
 
 
 def clear_axes_calibration():
-    global axes_markers
-    if not('axis_calibration_indices' in gv.f) or not('axis_calibration_limits'):
-        return
 
     answer = QtWidgets.QMessageBox.question(gv.w, 'Clear calibration', 'Are you sure you want to delete all previous calibrations?',
                                             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel, QtWidgets.QMessageBox.Cancel)
@@ -168,8 +167,26 @@ def clear_axes_calibration():
     if not(answer == QtWidgets.QMessageBox.Yes):
         return
 
-    del gv.f['axis_calibration_indices']
-    del gv.f['axis_calibration_limits']
+    try:
+        del gv.f['axis_calibration_indices']
+    except:
+        pass
+    else:
+        print('Deleted axis_calibration_indices')
+
+    try:
+        del gv.f['axis_calibration_limits']
+    except:
+        pass
+    else:
+        print('Deleted axis_calibration_limits')
+
+    try:
+        del gv.f['axis_calibration_scale']
+    except:
+        pass
+    else:
+        print('Deleted axis_calibration_scale')
 
     update_axes_table()
 
@@ -179,7 +196,6 @@ def update_axes_marker():
     x_color = (255, 0, 0)
     y_color = (0, 0, 255)
     ### Create markers
-    return
     if not(bool(axes_markers)):
         axes_markers['xlims'] = pg.PlotDataItem(x=[], y=[], name='xlims',
                                                 symbol='+', symbolBrush=(*x_color,255,), symbolPen=None, symbolSize=20,
@@ -199,7 +215,7 @@ def update_axes_marker():
     axes_markers['ylims'].setSymbolBrush((*y_color, 0))
     axes_markers['ylims'].setPen((*y_color, 0))
 
-    if not('axis_calibration_indices' in gv.f) or not('axis_calibration_limits'):
+    if gv.f is None or not('axis_calibration_indices' in gv.f) or not('axis_calibration_limits' in gv.f):
         return
 
     ### Check if calibration for frame exists (either for this frame or an earlier one -> lower index)

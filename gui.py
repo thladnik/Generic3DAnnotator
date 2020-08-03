@@ -41,10 +41,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mb_file_open.setShortcut('Ctrl+O')
         self.mb_file_open.triggered.connect(file_handling.open_file)
         self.mb_file_import = self.mb_file.addAction('Import image sequence...')
-        self.mb_file_close = self.mb_file.addAction('Close file')
-        self.mb_file_close.triggered.connect(file_handling.close_file)
         self.mb_file_import.setShortcut('Ctrl+I')
         self.mb_file_import.triggered.connect(file_handling.import_file)
+        self.mb_file_export = self.mb_file.addAction('Export scaled position data')
+        self.mb_file_export.setShortcut('Ctrl+E')
+        self.mb_file_export.triggered.connect(lambda: self.exportPositionData(scaled=True))
+        self.mb_file_close = self.mb_file.addAction('Close file')
+        self.mb_file_close.triggered.connect(file_handling.close_file)
         self.mb_edit = self.mb.addMenu('Edit')
         self.mb_edit.act_rot_90cw = self.mb_edit.addAction('Rotate 90° CW')
         self.mb_edit.act_rot_90cw.triggered.connect(lambda: self.updateRotationFilter(-1))
@@ -211,6 +214,62 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewer.addImageFilter('rotation', np.rot90, 1, [gv.f.attrs[gv.KEY_ROT]])
         self.viewer.slider.valueChanged.emit(self.viewer.slider.value())
 
+    def exportPositionData(self, scaled=False):
+        print('Export position data')
+        self.rpanel.setEnabled(False)
+        gv.app.processEvents()
+        calib_order = list(gv.f['axis_calibration_limits'].attrs['axis_limit_order'])
+
+        calib_idcs = gv.f['axis_calibration_indices'][:, 0]
+        calib_scale = gv.f['axis_calibration_scale'][:]
+        calib_limits = gv.f['axis_calibration_limits'][:]
+
+        centroids = gv.f['particle_centroids']
+        print('Apply scale')
+        new_pos = []
+        calib_idx = -1
+        scale = None
+        limits = None
+        for i in range(centroids.shape[0]):
+            idx = calib_idcs[calib_idcs <= i][-1]
+            if idx > calib_idx:
+                calib_idx = idx
+                _idx = np.array(range(calib_idcs.shape[0]))[calib_idcs == calib_idx][0]
+                # Set scale
+                scale = calib_scale[_idx, :]
+                xscale = scale[calib_order.index('xmax')] - scale[calib_order.index('xmin')]
+                yscale = scale[calib_order.index('ymax')] - scale[calib_order.index('ymin')]
+                # Set limits
+                limits = calib_limits[_idx, :, :]
+                xmin = limits[calib_order.index('xmin'), :]
+                xmax = limits[calib_order.index('xmax'), :]
+                ymin = limits[calib_order.index('ymin'), :]
+                ymax = limits[calib_order.index('ymax'), :]
+
+                print('New calibration starting at frame {}'.format(calib_idx))
+                print('XScale {}, YScale {}, limits {},{},{},{}'.format(xscale, yscale, xmin, xmax, ymin, ymax))
+
+            if calib_idx < 0:
+                print('WARNING: no calibration set for frame {}'.format(i))
+                continue
+
+            self.updateParticle2ObjectMatches(i)
+
+            c = centroids[i, np.logical_and(np.isfinite(centroids[i, :, 0]), np.isfinite(centroids[i, :, 1])), :]
+            c[:, 0] -= xmin[0]
+            c[:, 0] /= xmax[0] - xmin[0]
+            c[:, 0] *= xscale
+            c[:, 1] -= ymin[1]
+            c[:, 1] /= ymax[1] - ymin[1]
+            c[:, 1] *= yscale
+            new_pos.append(c)
+
+        fpath = gv.filepath.split('.')
+        file = '{}.npy'.format('.'.join(fpath[:-1]))
+        print('Save to {}'.format(file))
+        np.save(file, new_pos)
+
+        self.rpanel.setEnabled(True)
 
     def setDataset(self, dsetName):
         if gv.f is None:
@@ -248,10 +307,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 or not(gv.KEY_PART_CENTR in gv.f):
             return
 
-        self.updateParticle2ObjectMatches()
+        frame_idx = self.viewer.slider.value()
+        self.updateParticle2ObjectMatches(frame_idx)
 
         ### Display particle markers
-        frame_idx = self.viewer.slider.value()
         i = None
         for i, centroid in enumerate(gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]):
             ### If centroid not displayed in this frame: skip
@@ -287,7 +346,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.viewer.particles[i].setData(x=[centroid[0]], y=[centroid[1]])
 
 
-    def updateParticle2ObjectMatches(self):
+    def updateParticle2ObjectMatches(self, frame_idx):
         #print('update1')
 
         ### Check if particles and objects are correctly saved to file
@@ -300,7 +359,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         #print('update2')
 
-        frame_idx = self.viewer.slider.value()
         ### Calculate particle distances to objects
         obj_pos = np.array([gv.f[obj_name][gv.KEY_NODEINTERP][frame_idx,:] for obj_name in gv.f.attrs[gv.KEY_OBJLIST]])
         particles = gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]
@@ -313,6 +371,8 @@ class MainWindow(QtWidgets.QMainWindow):
         obj_idcs = np.arange(obj_pos.shape[0], dtype=int)[np.isfinite(obj_pos[:,0])]
         particles = particles[np.isfinite(particles[:,0]),:]
 
+        if particles.shape[0] == 0:
+            return
 
         use_exclusive_matching = True
         if use_exclusive_matching:
@@ -351,6 +411,11 @@ class MainWindow(QtWidgets.QMainWindow):
         #print(len(combined), len(particles))
 
         #print(combined)
+
+        if all_particles.shape[0] > gv.f[gv.KEY_PART_CENTR].shape[1]:
+            print('WARNING: Truncate particle list from {} to {} particles in frame {}'.
+                  format(all_particles.shape[0], gv.f[gv.KEY_PART_CENTR].shape[1], frame_idx))
+            all_particles = all_particles[:gv.f[gv.KEY_PART_CENTR].shape[1],:]
 
         #import IPython
         #IPython.embed()
@@ -517,6 +582,7 @@ class ParticleDetectionWidget(QtWidgets.QGroupBox):
         self.thresh_rule = QtWidgets.QComboBox()
         self.thresh_rule.addItems(['>', '<'])
         self.thresh_rule.currentTextChanged.connect(self.updateParticleDetectionFilter)
+        self.thresh_rule.setEnabled(False)
         self.layout().addWidget(QLabel('Threshold rule'), 0, 0)
         self.layout().addWidget(self.thresh_rule, 0, 1)
 
@@ -754,14 +820,6 @@ if __name__ == '__main__':
 
     ### Create application
     gv.app = QtWidgets.QApplication([])
-
-
-    ### Calibration
-    # Axes
-    axes_order = ['xmin', 'xmax', 'ymin', 'ymax']
-    set_axes = False
-    axes_markers = dict()
-
 
     #gvars.open_dir = './testdata'
     gv.open_dir = 'T:'
