@@ -6,6 +6,7 @@ import pyqtgraph as pg
 from scipy.spatial import distance
 from sklearn.neighbors import NearestCentroid
 import time
+import pickle
 
 import gv
 import file_handling
@@ -264,10 +265,12 @@ class MainWindow(QtWidgets.QMainWindow):
             c[:, 1] *= yscale
             new_pos.append(c)
 
-        fpath = gv.filepath.split('.')
-        file = '{}.npy'.format('.'.join(fpath[:-1]))
-        print('Save to {}'.format(file))
-        np.save(file, new_pos)
+        data = dict(positions=new_pos, time=gv.f['time'][:])
+
+        filepath = '{}.pickle'.format('.'.join(gv.filepath.split('.')[:-1]))
+        print('Save to {}'.format(filepath))
+        with open(filepath, 'wb') as file:
+            pickle.dump(data, file)
 
         self.rpanel.setEnabled(True)
 
