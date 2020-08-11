@@ -1,8 +1,7 @@
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
+import pandas as pd
 
 filepath = 'T:/swimheight_light_5cm_Scale50pc.pickle'
 with open(filepath, 'rb') as file:
@@ -19,13 +18,20 @@ for i, c in enumerate(positions):
 
 ### Plot first few particles
 plot_first = 9
+data_out = dict()
+data_out['times'] = times
 for i in range(plot_first):
     boolvec = (pos[:,i,1] >= 0.0) & (pos[:,i,1] < 6.0)
-    t = times[boolvec]
-    p = pos[boolvec,i,1]
-    plt.plot(t, p, '--', alpha=0.4, label='Fish {}'.format(i))
+    p = pos[:,i,1]
+    p[np.logical_not(boolvec)] = np.nan
+    data_out['y_pos{}'.format(i)] = p
+    plt.plot(times, p, '--', alpha=0.4, label='Fish {}'.format(i))
 
 plt.legend()
 plt.ylabel('Y-Position [cm]')
 plt.xlabel('Time [s]')
 plt.show()
+
+df = pd.DataFrame(data_out)
+df.to_csv('{}.csv'.format('.'.join(filepath.split('.')[:-1])))
+
