@@ -1,8 +1,22 @@
+"""
+https://github.com/thladnik/Generic3DAnnotator/processing.py - Processing functions to be called from GUI and worker processes.
+Copyright (C) 2020 Tim Hladnik
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <http://www.gnu.org/licenses/>.
+"""
 import cv2
 import numpy as np
-from skimage.filters import threshold_otsu
-from scipy import stats
-from scipy.signal import convolve2d
 
 import gv
 from median_subtraction import median_norm
@@ -37,27 +51,6 @@ def adaptive_threshold_filter(image, maxval, amethod, ttype, block_size, c):
 
 def particle_detector(image, thresh_rule, std_mult):
 
-    ### Separate cell image from background with Otsu thresholding
-    #cell = image > threshold_otsu(image, nbins_otsu)
-
-    ### Filter brightest pixels
-    #potential_centers = image > np.percentile(image[cell], percentile)
-    #potential_centers = image > percentile
-
-    if thresh_rule == '>':
-        comp = np.greater
-        op = np.add
-    else:
-        comp = np.less
-        op = np.subtract
-    #x = stats.norm.pdf(np.arange(-3, 3.01, 3.0), scale=1.0)
-    x = np.array([1,1,1])/3
-    kernel = x.reshape((1, -1)) * x.reshape((-1, 1))
-
-    #image = convolve2d(image, kernel)
-    #image = convolve2d(image.T, kernel)
-
-    potential_centers = comp(image, op(np.mean(image), std_mult * np.std(image)))
 
     potential_centers = np.logical_or(image > np.mean(image) + std_mult * np.std(image), image < np.mean(image) - std_mult * np.std(image))
 
@@ -66,9 +59,6 @@ def particle_detector(image, thresh_rule, std_mult):
 
     ### Reverse sort contour indices by area
     areas = sorted([(cv2.contourArea(cnt), i) for i, cnt in enumerate(cnts)])[::-1]
-
-    ### Filter all contours with > 2 contour points
-    #cnts2 = [cnts[i] for a, i in areas if a > 0]
 
     cnts2 = [np.fliplr(cnts[i].squeeze()) for a, i in areas if a > 0]
 

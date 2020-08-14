@@ -1,3 +1,20 @@
+"""
+https://github.com/thladnik/Generic3DAnnotator/gui.py - Main file for starting program/GUI.
+Copyright (C) 2020 Tim Hladnik
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <http://www.gnu.org/licenses/>.
+"""
 import numpy as np
 from matplotlib import cm
 from PyQt5 import QtCore, QtWidgets
@@ -220,12 +237,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rpanel.setEnabled(False)
         gv.app.processEvents()
         calib_order = list(gv.f['axis_calibration_limits'].attrs['axis_limit_order'])
-
         calib_idcs = gv.f['axis_calibration_indices'][:, 0]
         calib_scale = gv.f['axis_calibration_scale'][:]
         calib_limits = gv.f['axis_calibration_limits'][:]
 
-        centroids = gv.f['particle_centroids']
+        centroids = gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ]
         print('Apply scale')
         new_pos = []
         calib_idx = -1
@@ -254,6 +270,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 print('WARNING: no calibration set for frame {}'.format(i))
                 continue
 
+            ## IMPORTANT: Match particles with objects
             self.updateParticle2ObjectMatches(i)
 
             c = centroids[i, np.logical_and(np.isfinite(centroids[i, :, 0]), np.isfinite(centroids[i, :, 1])), :]
@@ -310,43 +327,73 @@ class MainWindow(QtWidgets.QMainWindow):
                 or not(gv.KEY_PART_CENTR in gv.f):
             return
 
+
         frame_idx = self.viewer.slider.value()
         self.updateParticle2ObjectMatches(frame_idx)
 
         ### Display particle markers
-        i = None
         for i, centroid in enumerate(gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]):
+            centr_name = 'centroid_{}'.format(i)
+
             ### If centroid not displayed in this frame: skip
             if np.any(np.isnan(centroid)):
 
                 ### If it was displayed in previous frame: remove and delete
-                if i in self.viewer.particles:
-                    self.viewer.view.removeItem(self.viewer.particles[i])
-                    del self.viewer.particles[i]
+                if centr_name in self.viewer.particles:
+                    self.viewer.view.removeItem(self.viewer.particles[centr_name])
+                    del self.viewer.particles[centr_name]
 
                 continue
 
             ### Create new marker
-            if not(i in self.viewer.particles):
+            if not(centr_name in self.viewer.particles):
 
 
                 ## Create marker
                 marker = pg.PlotDataItem(x=[centroid[0]], y=[centroid[1]], symbolBrush=None, symbolPen=None, symbol='o', symbolSize=18,
-                                   name='centroid_{}'.format(i))
-                self.viewer.particles[i] = marker
+                                         name=centr_name)
+                self.viewer.particles[centr_name] = marker
                 self.viewer.view.addItem(marker)
 
-            ### Set color
-            obj_name = '{}{}'.format(gv.KEY_OBJSTR, i)
-            if gv.KEY_OBJLIST in gv.f.attrs and obj_name in gv.f.attrs[gv.KEY_OBJLIST] \
-                    and np.all(np.isfinite(gv.f[obj_name][gv.KEY_NODEINTERP][frame_idx,:])):
-                pen = pg.mkPen((*gv.cmap_lut[i, :3],255,), width=2)
-            else:
-                pen = pg.mkPen((255,255,255,255,), width=1, style=QtCore.Qt.DotLine)
-            self.viewer.particles[i].setSymbolPen(pen)
+            ### Set particle pen and coordinates
+            pen = pg.mkPen((255, 255, 255, 128,), width=1, style=QtCore.Qt.DotLine)
+            self.viewer.particles[centr_name].setSymbolPen(pen)
 
             ### Set coordinates of particle centroid
-            self.viewer.particles[i].setData(x=[centroid[0]], y=[centroid[1]])
+            self.viewer.particles[centr_name].setData(x=[centroid[0]], y=[centroid[1]])
+
+
+        ### Display all particles matches to objects (in color) on top
+        for i, centroid in enumerate(gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:]):
+            centr_name = 'centroid_for_obj{}'.format(i)
+            if any(np.isnan(centroid)):
+                print('No particle for obj {} in frame {}'.format(i, frame_idx))
+                continue
+
+            ### If centroid not displayed in this frame: skip
+            if np.any(np.isnan(centroid)):
+
+                ### If it was displayed in previous frame: remove and delete
+                if centr_name in self.viewer.particles:
+                    self.viewer.view.removeItem(self.viewer.particles[centr_name])
+                    del self.viewer.particles[centr_name]
+
+                continue
+
+            ### Create new marker
+            if not(centr_name in self.viewer.particles):
+                ## Add marker
+                marker = pg.PlotDataItem(x=[centroid[0]], y=[centroid[1]], symbolBrush=None, symbolPen=None, symbol='o',
+                                         symbolSize=18,
+                                         name=centr_name)
+
+                self.viewer.particles[centr_name] = marker
+                self.viewer.view.addItem(marker)
+
+            ## Set pen and coordinates of particle centroid
+            pen = pg.mkPen((*gv.cmap_lut[i, :3],255,), width=3)
+            self.viewer.particles[centr_name].setSymbolPen(pen)
+            self.viewer.particles[centr_name].setData(x=[centroid[0]+np.random.rand()], y=[centroid[1]+np.random.rand()])
 
 
     def updateParticle2ObjectMatches(self, frame_idx):
@@ -360,9 +407,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 or not(gv.KEY_OBJLIST in gv.f.attrs) \
                 or len(gv.f.attrs[gv.KEY_OBJLIST]) == 0:
             return
-        #print('update2')
 
-        ### Calculate particle distances to objects
+        if gv.KEY_PART_CENTR_MATCH_TO_OBJ in gv.f \
+            and gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ].shape[1] != len(gv.f.attrs[gv.KEY_OBJLIST]):
+
+            print('Number of objects changed. Reset obj-particle matching.')
+            del gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ]
+
+        if not(gv.KEY_PART_CENTR_MATCH_TO_OBJ in gv.f):
+            gv.f.create_dataset(gv.KEY_PART_CENTR_MATCH_TO_OBJ,
+                                shape=(gv.f[gv.KEY_ORIGINAL].shape[0], len(gv.f.attrs[gv.KEY_OBJLIST]), 2),
+                                dtype = np.float64,
+                                fillvalue = np.nan)
+
+
+
         obj_pos = np.array([gv.f[obj_name][gv.KEY_NODEINTERP][frame_idx,:] for obj_name in gv.f.attrs[gv.KEY_OBJLIST]])
         particles = gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]
 
@@ -377,7 +436,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if particles.shape[0] == 0:
             return
 
-        use_exclusive_matching = True
+        use_exclusive_matching = False
         if use_exclusive_matching:
             ### Classify particles
             if obj_idcs.shape[0] > 1:
@@ -390,7 +449,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
 
             winners = list()
-            rejects = list()
             for i, pos in enumerate(obj_pos):
                 pot_particles = particles[result == i]
                 if pot_particles.shape[0] == 0:
@@ -403,28 +461,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 dists = sorted(dists)
                 winners.append(pot_particles[dists[0][1]])
-                if len(dists) > 1:
-                    rejects.extend([pot_particles[d[1]] for d in dists[1:]])
 
-            all_particles = np.array([*winners, *rejects])
+            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = winners
 
+        # Allow for one particle to belong to multiple objects
         else:
-            pass
+            dists = distance.cdist(obj_pos, particles, 'euclidean')
 
-        #print(len(combined), len(particles))
-
-        #print(combined)
-
-        if all_particles.shape[0] > gv.f[gv.KEY_PART_CENTR].shape[1]:
-            print('WARNING: Truncate particle list from {} to {} particles in frame {}'.
-                  format(all_particles.shape[0], gv.f[gv.KEY_PART_CENTR].shape[1], frame_idx))
-            all_particles = all_particles[:gv.f[gv.KEY_PART_CENTR].shape[1],:]
-
-        #import IPython
-        #IPython.embed()
-        gv.f[gv.KEY_PART_CENTR][frame_idx,:,:] = np.nan
-        gv.f[gv.KEY_PART_CENTR][frame_idx,:all_particles.shape[0],:] = all_particles
-
+            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = particles[dists.argmin(axis=1),:]
 
 
 
