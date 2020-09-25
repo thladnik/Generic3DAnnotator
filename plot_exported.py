@@ -21,9 +21,9 @@ import pickle
 import pandas as pd
 from scipy import stats, interpolate, signal
 
-#filepath = 'test_pickle/swimheight_light_5cm_Scale50pc.pickle' # Very good
+filepath = 'test_pickle/swimheight_light_5cm_Scale50pc.pickle' # Very good
 #filepath = 'test_pickle/swimheight_dark_5cm_Scale100pc.pickle' # Good
-filepath = 'test_pickle/swimheight_light_10cm_Scale100pc.pickle' # Okay
+#filepath = 'test_pickle/swimheight_light_10cm_Scale100pc.pickle' # Okay
 #filepath = 'test_pickle/swimheight_dark_15cm_Scale100pc.pickle' # Terrible problems
 with open(filepath, 'rb') as file:
     data = pickle.load(file)
@@ -60,7 +60,8 @@ def filter_position(p, fps, cutoff, discard_factor, restitute_factor, plot=False
     p_orig = np.copy(p)
 
     ### Plot before
-    plt.plot(times, p, '-', color=colors[i], linewidth=.3, alpha=0.5)
+    if plot:
+        plt.plot(times, p, '-', color=colors[i], linewidth=.3, alpha=0.5)
 
     ### 1st pass: Discard positions based distance to lowpass filtered version
     ## Filter
@@ -73,8 +74,9 @@ def filter_position(p, fps, cutoff, discard_factor, restitute_factor, plot=False
     p_diff_sd = np.nanstd(p_diff)
     p[p_diff > discard_factor*p_diff_sd] = np.nan
 
-    plt.plot(times, p_filt, '--', color=colors[i], linewidth=2., alpha=0.3, label='Fish {}'.format(i))
-    plt.plot(times, p, '-', color=colors[i], linewidth=2., alpha=1.0, label='Fish {}'.format(i))
+    if plot:
+        plt.plot(times, p_filt, '--', color=colors[i], linewidth=2., alpha=0.3, label='Fish {}'.format(i))
+        plt.plot(times, p, '-', color=colors[i], linewidth=2., alpha=1.0, label='Fish {}'.format(i))
 
     ### 2nd pass: Interpolate previously discarded positions and substitute
     #              with original based on distance of original/interpolation
@@ -96,7 +98,8 @@ def filter_position(p, fps, cutoff, discard_factor, restitute_factor, plot=False
 
         num_iters += 1
 
-    plt.plot(times, p, '-', color=colors[i], linewidth=1.2, alpha=1.0, label='Fish {}'.format(i))
+    if plot:
+        plt.plot(times, p, '-', color=colors[i], linewidth=1.2, alpha=1.0, label='Fish {}'.format(i))
 
     return p
 
