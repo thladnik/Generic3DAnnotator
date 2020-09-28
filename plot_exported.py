@@ -21,94 +21,116 @@ import pickle
 import pandas as pd
 from scipy import stats, interpolate, signal
 
-filepath = 'test_pickle/swimheight_light_5cm_Scale50pc.pickle' # Very good
-#filepath = 'test_pickle/swimheight_dark_5cm_Scale100pc.pickle' # Good
-#filepath = 'test_pickle/swimheight_light_10cm_Scale100pc.pickle' # Okay
-#filepath = 'test_pickle/swimheight_dark_15cm_Scale100pc.pickle' # Terrible problems
-with open(filepath, 'rb') as file:
-    data = pickle.load(file)
 
-positions = data['positions']
-times = data['time']
+def load_file(filepath, lowerbound, upperbound):
+    with open(filepath, 'rb') as file:
+        data = pickle.load(file)
 
-### Write to uniform array
-pos = np.nan * np.ones((len(positions), 50, 2))
-for i, c in enumerate(positions):
-    for j, cc in enumerate(c):
-        pos[i,j,:] = cc
+    positions = data['positions']
+    times = data['time']
 
-times = times[5:3000]
-pos = pos[5:3000,:,:]
+    ### Write to uniform array
+    pos = np.nan * np.ones((len(positions), 50, 2))
+    for i, c in enumerate(positions):
+        for j, cc in enumerate(c):
+            if cc[1] < lowerbound or cc[1] > upperbound:
+                pos[i, j, :] = [np.nan, np.nan]
+            else:
+                pos[i, j, :] = cc
 
-colors = ['b', 'r', 'g', 'c', 'y', 'm', 'k']
-plt.figure()
+    return pos, times
 
-### Plot first few particles
-plot_first = 0
-plot_num = 6
-data_out = dict()
-data_out['times'] = times
+def filter_position(times, pos, fps, cutoff, discard_factor, restitute_factor, plot=False):
 
-
-def filter_position(p, fps, cutoff, discard_factor, restitute_factor, plot=False):
-
-    if np.isnan(pos[:,i,1]).sum() > 0:
-        print('WARNING: {} NaNs in position dataset. '.format(np.isnan(pos[:,i,1]).sum())
-              + 'Substituting with zeros for filtering')
-        p[np.isnan(p)] = 0.
-
-    p_orig = np.copy(p)
-
-    ### Plot before
-    if plot:
-        plt.plot(times, p, '-', color=colors[i], linewidth=.3, alpha=0.5)
-
-    ### 1st pass: Discard positions based distance to lowpass filtered version
-    ## Filter
-    nyquist = fps/2
-    b, a = signal.butter(1, cutoff/nyquist, 'low')
-    p_filt = signal.filtfilt(b, a, p)
-
-    ## Discard
-    p_diff = np.abs(p - p_filt)
-    p_diff_sd = np.nanstd(p_diff)
-    p[p_diff > discard_factor*p_diff_sd] = np.nan
+    print('Input shape: {}'.format(pos.shape))
+    new_pos = np.zeros(pos.shape[:2])
+    print('Output shape: {}'.format(new_pos.shape))
 
     if plot:
-        plt.plot(times, p_filt, '--', color=colors[i], linewidth=2., alpha=0.3, label='Fish {}'.format(i))
-        plt.plot(times, p, '-', color=colors[i], linewidth=2., alpha=1.0, label='Fish {}'.format(i))
+        colors = plt.get_cmap('Dark2').colors
+        plt.figure()
 
-    ### 2nd pass: Interpolate previously discarded positions and substitute
-    #              with original based on distance of original/interpolation
-    num_iters = 0
-    num_changed = 1
-    while num_changed > 0:
-        num_changed = 0
+    for i in range(pos.shape[1]):
+        print('Particle {}'.format(i))
+        p = pos[:,i,1]
 
-        speed_sd = np.nanstd(np.diff(p))
+        if np.isnan(p).sum() > 0:
+            print('WARNING: {} NaNs in position dataset. '.format(np.isnan(p).sum())
+                  + 'Substituting with zeros for filtering')
+            p[np.isnan(p)] = 0.
 
-        p_interp = interpolate.interp1d(times[np.isfinite(p)], p[np.isfinite(p)],
-                                        'linear', fill_value=np.nan, bounds_error=False)(times)
-        for j, pi in enumerate(p_interp):
-            if np.isnan(p[j]) and np.abs(p_orig[j] - pi) < restitute_factor*speed_sd:
-                p[j] = p_orig[j]
-                num_changed += 1
+        ### Copy original position
+        p_orig = np.copy(p)
 
-        print('Iterations {}: {} changed'.format(num_iters, num_changed))
+        ### Plot before
+        if plot:
+            plt.plot(times, p, '-', color=colors[i], linewidth=.3, alpha=0.5)
 
-        num_iters += 1
+        ### 1st pass: Discard positions based distance to lowpass filtered version
+        ## Filter
+        nyquist = fps/2
+        b, a = signal.butter(1, cutoff/nyquist, 'low')
+        p_filt = signal.filtfilt(b, a, p)
+
+        ## Discard
+        p_diff = np.abs(p - p_filt)
+        p_diff_sd = np.nanstd(p_diff)
+        p[p_diff > discard_factor*p_diff_sd] = np.nan
+
+        if plot:
+            plt.plot(times, p_filt, '--', color=colors[i], linewidth=2., alpha=0.3, label='Fish {}'.format(i))
+            plt.plot(times, p, '-', color=colors[i], linewidth=2., alpha=1.0, label='Fish {}'.format(i))
+
+        ### 2nd pass: Interpolate previously discarded positions and substitute
+        #              with original based on distance of original/interpolation
+        num_iters = 0
+        num_changed = 1
+        while num_changed > 0:
+            num_changed = 0
+
+            speed_sd = np.nanstd(np.diff(p))
+
+            p_interp = interpolate.interp1d(times[np.isfinite(p)], p[np.isfinite(p)],
+                                            'linear', fill_value=np.nan, bounds_error=False)(times)
+            for j, pi in enumerate(p_interp):
+                if np.isnan(p[j]) and np.abs(p_orig[j] - pi) < restitute_factor*speed_sd:
+                    p[j] = p_orig[j]
+                    num_changed += 1
+
+            print('Iterations {}: {} changed'.format(num_iters, num_changed))
+
+            num_iters += 1
+
+        if plot:
+            plt.plot(times, p, '-', color=colors[i], linewidth=1.2, alpha=1.0, label='Fish {}'.format(i))
+
+        new_pos[:,i] = p
 
     if plot:
-        plt.plot(times, p, '-', color=colors[i], linewidth=1.2, alpha=1.0, label='Fish {}'.format(i))
+        plt.ylabel('Y-Position [cm]')
+        plt.xlabel('Time [s]')
+        plt.show()
 
-    return p
+    return new_pos
 
+if __name__ == '__main__':
 
-for i in range(plot_first, plot_first+plot_num):
-    print('Fish {}'.format(i))
+    #filepath = 'test_pickle/swimheight_light_5cm_Scale50pc.pickle' # Very good
+    filepath = 'test_pickle/swimheight_dark_5cm_Scale100pc.pickle' # Good
+    #filepath = 'test_pickle/swimheight_light_10cm_Scale100pc.pickle' # Okay
+    #filepath = 'test_pickle/swimheight_dark_15cm_Scale100pc.pickle' # Terrible problems
 
+    water_surface = 0.
+    max_water_depth = 5.
+    pos, times = load_file(filepath, water_surface, max_water_depth)
 
-    p = filter_position(p=pos[:, i, 1],
+    fish_num = 6
+    times = times[5:3000]
+    pos = pos[5:3000,:fish_num,:]
+
+    new_pos = filter_position(
+                        times=times,
+                        pos=pos,
                         fps=5,
                         cutoff=0.1,
                         discard_factor=0.5,
@@ -116,24 +138,12 @@ for i in range(plot_first, plot_first+plot_num):
                         plot=True)
 
 
-    ### (optional) Inspect speed histogram
-    if False:
-        n, bins, _ = plt.hist(local_speeds, bins=100, density=True, color=colors[i], alpha=0.1)
-        bin_centers = bins + (bins[1]-bins[0])/2
-        print(stats.norm.logpdf(bin_centers, loc=speed_m, scale=speed_sd).min() > 0.)
-        plt.plot(bin_centers, stats.norm.pdf(bin_centers, loc=speed_m, scale=speed_sd), color=colors[i])
-        plt.axvline(speed_m-2*speed_sd, 0, 1, color=colors[i])
-        plt.axvline(speed_m+2*speed_sd, 0, 1, color=colors[i])
 
-        plt.yscale('log')
-        plt.show()
 
-    data_out['y_pos{}'.format(i)] = p
-
-plt.ylabel('Y-Position [cm]')
-plt.xlabel('Time [s]')
-plt.show()
-
-df = pd.DataFrame(data_out)
-df.to_csv('{}.csv'.format('.'.join(filepath.split('.')[:-1])))
+    data_out = dict()
+    data_out['times'] = times
+    for i in range(new_pos.shape[1]):
+        data_out['y_pos{}'.format(i)] = new_pos[:,i]
+    df = pd.DataFrame(data_out)
+    df.to_csv('{}.csv'.format('.'.join(filepath.split('.')[:-1])))
 
