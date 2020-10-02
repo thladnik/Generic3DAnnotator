@@ -64,7 +64,6 @@ def run():
         thresh_rule = gv.w.gb_part_detect.thresh_rule.currentText()
         std_mult = gv.w.gb_part_detect.std_mult.value()
         cnts = processing.particle_detector(np.rot90(dset[i, :, :, :], gv.f.attrs[gv.KEY_ROT]), thresh_rule, std_mult)
-        #cnts = [c.squeeze() for c in cnts]
 
         if len(cnts) > dset_part.shape[1]:
             print('WARNING: too many contours. All discarded for frame {}'.format(i))

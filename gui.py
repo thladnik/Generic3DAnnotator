@@ -273,6 +273,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ## IMPORTANT: Match particles with objects
             self.updateParticle2ObjectMatches(i)
 
+            ## Scale centroid coordinates
             c = centroids[i, np.logical_and(np.isfinite(centroids[i, :, 0]), np.isfinite(centroids[i, :, 1])), :]
             c[:, 0] -= xmin[0]
             c[:, 0] /= xmax[0] - xmin[0]
@@ -356,7 +357,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.viewer.view.addItem(marker)
 
             ### Set particle pen and coordinates
-            pen = pg.mkPen((255, 255, 255, 128,), width=1, style=QtCore.Qt.DotLine)
+            pen = pg.mkPen((255, 70, 20, 255,), width=2, style=QtCore.Qt.DotLine)
             self.viewer.particles[centr_name].setSymbolPen(pen)
 
             ### Set coordinates of particle centroid
@@ -397,7 +398,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def updateParticle2ObjectMatches(self, frame_idx):
-        #print('update1')
 
         ### Check if particles and objects are correctly saved to file
         if gv.f is None \
@@ -468,7 +468,11 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             dists = distance.cdist(obj_pos, particles, 'euclidean')
 
-            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = particles[dists.argmin(axis=1),:]
+            min_dists = dists.min(axis=1)
+            idcs = dists.argmin(axis=1)
+            selected = particles[idcs,:]
+            selected[min_dists > 20,:] = [np.nan, np.nan]  ## Fixed threshold for pixel-distance; TODO: make customizable
+            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = selected
 
 
 
