@@ -15,36 +15,38 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program. If not, see <http://www.gnu.org/licenses/>.
 """
-import h5py
-from gui import HDF5ImageView
+from h5py import Dataset, File
+from matplotlib import cm
 from PyQt5.QtWidgets import QApplication
 from numpy import ndarray
+from trackpy import PandasHDFStoreBig
+
 from gui import MainWindow, Statusbar
 
 ### Key definitions
-KEY_PROCESSED : str = 'processed'
-KEY_ORIGINAL  : str = 'original'
-KEY_OBJLIST   : str = 'obj_list'
-KEY_OBJSTR    : str = 'obj'
-KEY_NODES     : str = 'nodes'
-KEY_NODEINTERP: str = 'node_interp'
-KEY_ROT       : str = 'rotation'
-KEY_FRAMEIDCS : str = 'frame_indices'
-KEY_TIME      : str = 'time'
-KEY_FPS       : str = 'fps'
-KEY_PARTICLES : str = 'particles'
-KEY_PART_CENTR: str = 'particle_centroids'
-KEY_PART_AREA : str = 'particle_area'
-KEY_PART_CENTR_MATCH_TO_OBJ : str = 'particle_matched_to_obj'
+KEY_PROCESSED: str = 'processed'
+KEY_ORIGINAL: str = 'original'
+KEY_TIME: str = 'time'
+KEY_ATTRROT: str = 'rotation'
+KEY_ATTR_FPS: str = 'fps'
 
-app             : QApplication    = None
-w               : MainWindow      = None
-statusbar       : Statusbar       = None
+KEY_ATTR_ROI_POS: str = 'rect_roi_pos'
+KEY_ATTR_ROI_SIZE: str = 'rect_roi_size'
 
-filepath        : str             = None
-open_dir        : str             = None
-f               : h5py.File       = None
-dset            : h5py.Dataset    = None
-cur_obj_name    : str             = None
-set_axes        : bool            = False
-cmap_lut        : ndarray         = None
+EXT_TRACKPY: str = 'trackpy'
+EXT_ID_MAP: str = 'idmap'
+
+CMAP_COLORS = cm.get_cmap('tab20').colors
+
+app: QApplication = None
+w: MainWindow = None
+statusbar: Statusbar = None
+
+filepath: str = None
+open_dir: str = None
+h5f: File = None
+tpf: PandasHDFStoreBig = None
+dset: Dataset = None
+cur_obj_name: str = None
+set_axes: bool = False
+cmap_lut: ndarray = None

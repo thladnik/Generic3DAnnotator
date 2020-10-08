@@ -20,44 +20,43 @@ from matplotlib import cm
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QLabel
 import pyqtgraph as pg
-from scipy.spatial import distance
-from sklearn.neighbors import NearestCentroid
 import time
 import pickle
+import trackpy as tp
+import os
+from queue import Queue
 
 import gv
 import file_handling
-import object_handling
-import processing
-import axis_calibration
 import median_subtraction
-import particle_detection
 
+from io import StringIO
+import sys
 
 ################################
 ### Main window
 
 class MainWindow(QtWidgets.QMainWindow):
-    
+
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
         gv.w = self
 
         self.resize(1300, 1000)
-        self.setTitle()
+        self.set_title()
         self.cw = QtWidgets.QWidget()
         self.setCentralWidget(self.cw)
         self.cw.setLayout(QtWidgets.QGridLayout())
-        
+
         ################
-        ### Create menu
-        
+        # Create menu
+
         self.mb = QtWidgets.QMenuBar()
         self.setMenuBar(self.mb)
         self.mb_file = self.mb.addMenu('File')
         self.mb_file_open = self.mb_file.addAction('Open file...')
         self.mb_file_open.setShortcut('Ctrl+O')
-        self.mb_file_open.triggered.connect(file_handling.open_file)
+        self.mb_file_open.triggered.connect(file_handling.open_hdf5)
         self.mb_file_import = self.mb_file.addAction('Import image sequence...')
         self.mb_file_import.setShortcut('Ctrl+I')
         self.mb_file_import.triggered.connect(file_handling.import_file)
@@ -67,418 +66,523 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mb_file_close = self.mb_file.addAction('Close file')
         self.mb_file_close.triggered.connect(file_handling.close_file)
         self.mb_edit = self.mb.addMenu('Edit')
-        self.mb_edit.act_rot_90cw = self.mb_edit.addAction('Rotate 90° CW')
-        self.mb_edit.act_rot_90cw.triggered.connect(lambda: self.updateRotationFilter(-1))
-        self.mb_edit.act_rot_90ccw = self.mb_edit.addAction('Rotate 90° CCW')
-        self.mb_edit.act_rot_90ccw.triggered.connect(lambda: self.updateRotationFilter(1))
-        self.mb_edit.act_rot_180 = self.mb_edit.addAction('Rotate 180°')
-        self.mb_edit.act_rot_180.triggered.connect(lambda: self.updateRotationFilter(2))
-        
+
         ################
-        ### Create ImageView
-        self.viewer = HDF5ImageView(self)
-        self.viewer.scene.sigMouseClicked.connect(object_handling.add_node)
-        self.viewer.scene.sigMouseClicked.connect(axis_calibration.set_axis_point)
+        # Create ImageView
+        self.viewer = HDF5ImageView(self, update_fun=self.update_image)
         self.cw.layout().addWidget(self.viewer, 0, 0)
-        self.viewer.slider.valueChanged.connect(object_handling.update_pos_marker)
-        self.viewer.objects = dict()
-        
+
+        self.particle_markers = pg.ScatterPlotItem(size=10,
+                                                   pen=pg.mkPen(None),
+                                                   brush=pg.mkBrush(255, 0, 0, 255))
+        self.particle_markers.sigClicked.connect(self.clicked_on_particle)
+        self.viewer.view.addItem(self.particle_markers)
+
         ################
-        ### Create right panel
-        
+        # Create right panel
+
         self.rpanel = QtWidgets.QWidget()
-        self.rpanel.setEnabled(False)
-        self.rpanel.setFixedWidth(500)
+        self.rpanel.setFixedWidth(350)
         self.rpanel.setLayout(QtWidgets.QVBoxLayout())
         self.cw.layout().addWidget(self.rpanel, 0, 1)
-        
-        ########
-        ### Display
-        self.gb_display = QtWidgets.QGroupBox('Display')
-        self.gb_display.setLayout(QtWidgets.QVBoxLayout())
-        self.gb_display.btn_raw = QtWidgets.QPushButton('Raw')
-        self.gb_display.btn_raw.clicked.connect(lambda: self.setDataset(gv.KEY_ORIGINAL))
-        self.gb_display.layout().addWidget(self.gb_display.btn_raw)
-        self.gb_display.btn_processed = QtWidgets.QPushButton('Processed')
-        self.gb_display.btn_processed.clicked.connect(lambda: self.setDataset(gv.KEY_PROCESSED))
-        self.gb_display.layout().addWidget(self.gb_display.btn_processed)
-        self.rpanel.layout().addWidget(self.gb_display)
-        
-        ########
-        ### Calibration
-        ## Axes
-        self.gb_calib = QtWidgets.QGroupBox('Calibration')
-        self.gb_calib.setLayout(QtWidgets.QVBoxLayout())
-        # Add label
-        self.gb_calib.lbl_axes = QLabel('Axes for scaling')
-        self.gb_calib.lbl_axes.setStyleSheet('font-weight:bold;')
-        self.gb_calib.layout().addWidget(self.gb_calib.lbl_axes)
-        # Add Button
-        self.gb_calib.btn_add_axes = QtWidgets.QPushButton('')
-        self.gb_calib.btn_add_axes.clicked.connect(axis_calibration.start_axes_calibration)
-        self.viewer.slider.valueChanged.connect(
-            lambda: self.gb_calib.btn_add_axes.setText('Set axes for frame {}'.format(self.viewer.slider.value())))
-        self.gb_calib.layout().addWidget(self.gb_calib.btn_add_axes)
-        # Status indicator
-        self.gb_calib.le_axes_status = QtWidgets.QLineEdit('')
-        self.gb_calib.le_axes_status.setEnabled(False)
-        self.gb_calib.le_axes_status.setStyleSheet('font-weight:bold; color:orange;')
-        self.gb_calib.layout().addWidget(self.gb_calib.le_axes_status)
-        # Table
-        self.gb_calib.axes_table = QtWidgets.QTableWidget()
-        self.gb_calib.axes_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.gb_calib.layout().addWidget(self.gb_calib.axes_table)
-        # Clear button
-        self.gb_calib.btn_clear_axes = QtWidgets.QPushButton('Clear calibration')
-        self.gb_calib.btn_clear_axes.clicked.connect(axis_calibration.clear_axes_calibration)
-        self.gb_calib.layout().addWidget(self.gb_calib.btn_clear_axes)
-        
-        # Markers
-        self.viewer.slider.valueChanged.connect(axis_calibration.update_axes_marker)
-        
-        ## Reference
-        # Label
-        self.gb_calib.lbl_ref = QLabel('References')
-        self.gb_calib.lbl_ref.setStyleSheet('font-weight:bold;')
-        self.gb_calib.layout().addWidget(self.gb_calib.lbl_ref)
-        # Button
-        self.gb_calib.btn_add_ref = QtWidgets.QPushButton('')
-        # gb_calib.btn_add_ref.clicked.connect(start_ref_calibration)
-        self.viewer.slider.valueChanged.connect(
-            lambda: self.gb_calib.btn_add_ref.setText('Set reference for frame {}'.format(self.viewer.slider.value())))
-        self.gb_calib.layout().addWidget(self.gb_calib.btn_add_ref)
-        
-        # Add to centralwidget
-        self.rpanel.layout().addWidget(self.gb_calib)
-
 
         ########
-        ### Median subtration + range normalization
-        self.gb_med_norm = QtWidgets.QGroupBox('Median subtraction + Range Normalization')
-        self.gb_med_norm.setLayout(QtWidgets.QGridLayout())
-        self.gb_med_norm.setCheckable(True)
-        self.gb_med_norm.setChecked(False)
-        self.gb_med_norm.toggled.connect(self.updateMedianSubtractionFilter)
-        ## Segment length
-        self.gb_med_norm.seg_len = QtWidgets.QSpinBox()
-        self.gb_med_norm.seg_len.setMinimum(1)
-        self.gb_med_norm.seg_len.setValue(40)
-        self.gb_med_norm.layout().addWidget(QLabel('Seg. len. [lower = less RAM]'), 0, 0)
-        self.gb_med_norm.layout().addWidget(self.gb_med_norm.seg_len, 0, 1)
-        ## Median range
-        self.gb_med_norm.med_range = QtWidgets.QSpinBox()
-        self.gb_med_norm.med_range.setMinimum(2)
-        self.gb_med_norm.med_range.setValue(20)
-        self.gb_med_norm.med_range.valueChanged.connect(self.updateMedianSubtractionFilter)
-        self.gb_med_norm.layout().addWidget(QLabel('Range [lower = faster]'), 1, 0)
-        self.gb_med_norm.layout().addWidget(self.gb_med_norm.med_range, 1, 1)
-        ## Run
-        self.gb_med_norm.btn_run = QtWidgets.QPushButton('Run subtraction + normalization')
-        median_range = self.gb_med_norm.med_range.value
-        segment_length = self.gb_med_norm.seg_len.value
-        self.gb_med_norm.btn_run.clicked.connect(lambda: median_subtraction.run(segment_length(), median_range()))
-        self.gb_med_norm.layout().addWidget(self.gb_med_norm.btn_run, 2, 0, 1, 2)
-        self.rpanel.layout().addWidget(self.gb_med_norm)
+        # Display switch
+        self.gb_display_switch = QtWidgets.QGroupBox('Switch display source')
+        self.gb_display_switch.setLayout(QtWidgets.QVBoxLayout())
+        self.gb_display_switch.btn_raw = QtWidgets.QPushButton('Raw')
+        self.gb_display_switch.btn_raw.clicked.connect(lambda: self.set_dataset(gv.KEY_ORIGINAL))
+        self.gb_display_switch.layout().addWidget(self.gb_display_switch.btn_raw)
+        self.gb_display_switch.btn_processed = QtWidgets.QPushButton('Processed')
+        self.gb_display_switch.btn_processed.clicked.connect(lambda: self.set_dataset(gv.KEY_PROCESSED))
+        self.gb_display_switch.layout().addWidget(self.gb_display_switch.btn_processed)
+        self.rpanel.layout().addWidget(self.gb_display_switch)
 
+        label_pipeline = QtWidgets.QLabel('Processing pipeline')
+        label_pipeline.setStyleSheet('font-weight:bold;')
+        self.rpanel.layout().addWidget(label_pipeline)
+        sep_line = QtWidgets.QFrame()
+        sep_line.setFrameShape(QtWidgets.QFrame.HLine)
+        sep_line.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.rpanel.layout().addWidget(sep_line)
 
         ########
-        ### Particle detection
-        self.gb_part_detect = ParticleDetectionWidget('Particle detection', self)
-        self.rpanel.layout().addWidget(self.gb_part_detect)
+        # 1. Import image sequence
+        self.gb_import = QtWidgets.QGroupBox('1. Import image sequence')
+        self.gb_import.setLayout(QtWidgets.QVBoxLayout())
+        self.gb_import.btn_import = QtWidgets.QPushButton('Import...')
+        self.gb_import.btn_import.clicked.connect(file_handling.import_file)
+        self.gb_import.layout().addWidget(self.gb_import.btn_import)
+        self.rpanel.layout().addWidget(self.gb_import)
 
         ########
-        ### Objects panel
-        self.gb_objects = QtWidgets.QGroupBox('Objects')
-        self.gb_objects.setLayout(QtWidgets.QVBoxLayout())
-        # New object
-        self.gb_objects.btn_new_object = QtWidgets.QPushButton('New object')
-        self.gb_objects.btn_new_object.clicked.connect(object_handling.create_object)
-        self.gb_objects.layout().addWidget(self.gb_objects.btn_new_object)
-        self.gb_objects.wdgt_buttons = QtWidgets.QWidget()
-        self.gb_objects.wdgt_buttons.setLayout(QtWidgets.QVBoxLayout())
-        self.gb_objects.layout().addWidget(self.gb_objects.wdgt_buttons)
-        self.rpanel.layout().addWidget(self.gb_objects)
-        
+        # Filter ROI contents
+        self.gb_filter = QtWidgets.QGroupBox('2. Filter ROI contents')
+        self.gb_filter.setLayout(QtWidgets.QGridLayout())
+        # Segment length
+        self.gb_filter.seg_len = QtWidgets.QSpinBox()
+        self.gb_filter.seg_len.setMinimum(10)
+        self.gb_filter.seg_len.setMaximum(9999)
+        self.gb_filter.seg_len.setValue(200)
+        self.gb_filter.layout().addWidget(QLabel('Seg. len. [lower = less RAM]'), 0, 0)
+        self.gb_filter.layout().addWidget(self.gb_filter.seg_len, 0, 1)
+        # Median range
+        self.gb_filter.med_range = QtWidgets.QSpinBox()
+        self.gb_filter.med_range.setMinimum(1)
+        self.gb_filter.med_range.setMaximum(9999)
+        self.gb_filter.med_range.setValue(50)
+        self.gb_filter.layout().addWidget(QLabel('Range [lower = faster]'), 1, 0)
+        self.gb_filter.layout().addWidget(self.gb_filter.med_range, 1, 1)
+        # Run
+        self.gb_filter.btn_run = QtWidgets.QPushButton('Run filter')
+        self.gb_filter.btn_run.clicked.connect(self.run_roi_filter)
+        self.gb_filter.layout().addWidget(self.gb_filter.btn_run, 2, 0, 1, 2)
+        self.rpanel.layout().addWidget(self.gb_filter)
+
+        ########
+        # Particle detection
+        self.gb_detection = QtWidgets.QGroupBox('3. Particle detection')
+        self.gb_detection.setLayout(QtWidgets.QGridLayout())
+        # Invert
+        self.gb_detection.layout().addWidget(QtWidgets.QLabel('Black-on-white'), 0, 0)
+        self.gb_detection.check_invert = QtWidgets.QCheckBox()
+        self.gb_detection.layout().addWidget(self.gb_detection.check_invert, 0, 1)
+        # Diameter
+        self.gb_detection.layout().addWidget(QtWidgets.QLabel('Diameter'), 1, 0)
+        self.gb_detection.spn_diameter = QtWidgets.QSpinBox()
+        self.gb_detection.spn_diameter.valueChanged.connect(self.detection_diameter_validator)
+        self.gb_detection.spn_diameter.setMinimum(1)
+        self.gb_detection.spn_diameter.setMaximum(9999)
+        self.gb_detection.spn_diameter.setValue(11)
+        self.gb_detection.layout().addWidget(self.gb_detection.spn_diameter, 1, 1)
+        # Minmass
+        self.gb_detection.layout().addWidget(QtWidgets.QLabel('Min. brightness'), 2, 0)
+        self.gb_detection.spn_minmass = QtWidgets.QSpinBox()
+        self.gb_detection.spn_minmass.setMinimum(100)
+        self.gb_detection.spn_minmass.setMaximum(9999)
+        self.gb_detection.spn_minmass.setValue(100)
+        self.gb_detection.layout().addWidget(self.gb_detection.spn_minmass, 2, 1)
+        # Run
+        self.gb_detection.btn_run = QtWidgets.QPushButton('Run')
+        self.gb_detection.btn_run.clicked.connect(self.run_particle_detection)
+        self.gb_detection.layout().addWidget(self.gb_detection.btn_run, 3, 0, 1, 2)
+        self.rpanel.layout().addWidget(self.gb_detection)
+
+        ########
+        # Particle tracking
+        self.gb_tracking = QtWidgets.QGroupBox('4. Trace particles')
+        self.gb_tracking.setLayout(QtWidgets.QGridLayout())
+        # Search range
+        self.gb_tracking.layout().addWidget(QtWidgets.QLabel('Search range'), 0, 0)
+        self.gb_tracking.srange = QtWidgets.QSpinBox()
+        self.gb_tracking.srange.setMinimum(1)
+        self.gb_tracking.srange.setMaximum(9999)
+        self.gb_tracking.srange.setValue(10)
+        self.gb_tracking.layout().addWidget(self.gb_tracking.srange, 0, 1)
+        # Memory
+        self.gb_tracking.layout().addWidget(QtWidgets.QLabel('Search memory'), 1, 0)
+        self.gb_tracking.smemory = QtWidgets.QSpinBox()
+        self.gb_tracking.smemory.setMinimum(1)
+        self.gb_tracking.smemory.setMaximum(9999)
+        self.gb_tracking.smemory.setValue(10)
+        self.gb_tracking.layout().addWidget(self.gb_tracking.smemory, 1, 1)
+        # Run
+        self.gb_tracking.btn_run = QtWidgets.QPushButton('Run')
+        self.gb_tracking.btn_run.clicked.connect(self.run_particle_tracking)
+        self.gb_tracking.layout().addWidget(self.gb_tracking.btn_run, 3, 0, 1, 2)
+        self.rpanel.layout().addWidget(self.gb_tracking)
+
+        ########
+        # Trace sorting
+        self.gb_sorting = QtWidgets.QGroupBox('5. Particle tracking')
+        self.gb_sorting.setLayout(QtWidgets.QGridLayout())
+        # Toggle sorting
+        self.gb_sorting.layout().addWidget(QtWidgets.QLabel('Toggle sorting'), 0, 0)
+        self.gb_sorting.toggle_sorting = QtWidgets.QCheckBox()
+        self.gb_sorting.toggle_sorting.setChecked(False)
+        self.gb_sorting.toggle_sorting.clicked.connect(self.start_particle_id_sorting)
+        self.gb_sorting.layout().addWidget(self.gb_sorting.toggle_sorting, 0, 1)
+        self.rpanel.layout().addWidget(self.gb_sorting)
+        # Save
+        self.gb_sorting.btn_save = QtWidgets.QPushButton('Save')
+        self.gb_sorting.btn_save.clicked.connect(self.save_particle_id_sorting)
+        self.gb_sorting.btn_save.setEnabled(False)
+        self.gb_sorting.layout().addWidget(self.gb_sorting.btn_save, 3, 0, 1, 2)
+        # Attrs
+        self.particle_id_map: dict = None
+        self.particle_labels = dict()
+
+        self.btn_test = QtWidgets.QPushButton('TEST')
+        self.btn_test.clicked.connect(lambda: self.start_thread(TrackpyLinker))
+        self.rpanel.layout().addWidget(self.btn_test)
+
+        # Spacer
         vSpacer = QtWidgets.QSpacerItem(1, 1, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.rpanel.layout().addItem(vSpacer)
-        
-        ### Add statusbar
+
+        # Add statusbar
         gv.statusbar = Statusbar()
         self.setStatusBar(gv.statusbar)
 
-        self.viewer.slider.valueChanged.connect(self.updateParticleMarkers)
+        # Start update timer
+        self.ui_update_timer = QtCore.QTimer()
+        self.ui_update_timer.setInterval(100)
+        self.ui_update_timer.timeout.connect(self.update_ui)
+        self.ui_update_timer.start()
 
-        ### Set up window and open/execute
         self.show()
 
-    def setTitle(self, sub=None):
+################
+# THREADING
+    def start_thread(self, thread_class, *args, **kwargs):
+        # Redirect stdout
+        self.queue = Queue()
+        self._stdout = sys.stdout
+        sys.stdout = CustomStdout(self.queue)
+        self.extern_dialog = ExternalWidget(self.queue)
+
+        print('Start thread')
+        self.thread = thread_class(*args, **kwargs)
+        self.thread.finished.connect(self.terminate_thread)
+        self.thread.start()
+
+    def terminate_thread(self):
+        # Re-route stdout
+        sys.stdout = self._stdout
+
+        self.extern_dialog.close()
+        self.thread.terminate()
+
+################
+#
+    def detection_diameter_validator(self, value):
+        value = value + 1 if value % 2 == 0 else value
+        self.gb_detection.spn_diameter.setValue(value)
+
+    def update_ui(self):
+        self.gb_display_switch.setEnabled(gv.dset is not None)
+
+    @staticmethod
+    def get_particle_color(particle_id, order):
+        colors = gv.CMAP_COLORS
+
+        alpha = 250 // order if order > 0 else 255
+
+        if particle_id >= 0:
+            c = (*[int(255 * c) for c in colors[int(particle_id) % len(colors)]], alpha)
+        else:
+            c = (255, 0, 0, alpha)
+
+        return c
+
+    def get_particle_id(self, p):
+        # Get particle id if available
+        particle_id = p.particle if 'particle' in p else -1
+
+        # Map if applicable
+        if self.particle_id_map is not None \
+                and particle_id in self.particle_id_map:
+            particle_id = self.particle_id_map[particle_id]
+
+        return int(particle_id)
+
+    def update_image(self):
+        """Update HDF5Viewer"""
+        im = self.viewer.get_image()
+
+        if im is None:
+            return
+
+        self.viewer.set_image(im)
+
+        # Remove all previous markers
+        self.particle_markers.clear()
+
+        # Plot particles
+        if gv.tpf is None:
+            return
+
+
+        add_x = gv.h5f.attrs[gv.KEY_ATTR_ROI_POS][1] \
+            if gv.dset.name == f'/{gv.KEY_ORIGINAL}' \
+            else 0
+        add_y = gv.h5f.attrs[gv.KEY_ATTR_ROI_POS][0] \
+            if gv.dset.name == f'/{gv.KEY_ORIGINAL}' \
+            else 0
+
+        frame_idx = self.viewer.slider.value()
+
+        # Display past particles
+        particle_trace_max = 10
+        spots = list()
+        for i in range(1, particle_trace_max):
+            idx = frame_idx-i
+            try:
+                rows = gv.tpf.get(idx).iterrows()
+            except Exception as exc:
+                rows = None
+
+            if rows is None:
+                continue
+
+            for _, p in rows:
+                particle_id = self.get_particle_id(p)
+
+                spots.append({'pos': [p.y+add_y, p.x+add_x],
+                               'data': (particle_id, i),
+                               'size': particle_trace_max-i,
+                               'pen': self.get_particle_color(particle_id, i),
+                               'brush': None})
+
+        # Plot current particle
+        try:
+            rows = gv.tpf.get(frame_idx).iterrows()
+        except Exception as exc:
+            rows = None
+
+        if rows is None:
+            return
+
+        # Clear particle_id labels
+        for id, label in self.particle_labels.items():
+            label.setText('')
+
+        # Display current points
+        for _, p in rows:
+            particle_id = self.get_particle_id(p)
+
+            pos = [p.y+add_y, p.x+add_x]
+            color = self.get_particle_color(particle_id, 0)
+
+            spots.append({'pos': pos,
+                           'data': (particle_id, 0),
+                           'size': 10,
+                           'pen': color,
+                           'brush': None})
+
+            # Add particle_id label
+            if particle_id not in self.particle_labels:
+                self.particle_labels[particle_id] = pg.TextItem(str(particle_id))
+                self.viewer.view.addItem(self.particle_labels[particle_id])
+
+            # Set particle_id and position
+            self.particle_labels[particle_id].setText(str(particle_id))
+            self.particle_labels[particle_id].setPos(*pos)
+
+        # Add spots to scatter plot item
+        self.particle_markers.addPoints(spots)
+
+    def start_particle_id_sorting(self):
+        self.particle_id_map = dict()
+        self.gb_sorting.btn_save.setEnabled(True)
+
+    def save_particle_id_sorting(self):
+        print(self.particle_id_map)
+
+        self.particle_id_map = None
+        # TODO: iterate over frames, map ids and save to file
+        self.gb_sorting.toggle_sorting.setChecked(False)
+
+    def clicked_on_particle(self, obj, points):
+        # Only if sorting is toggled
+        if not(self.gb_sorting.toggle_sorting.isChecked()):
+            return
+
+        # Click on 1st particle: copy id
+        if not(hasattr(self, 'current_particle_id')) \
+                or self.current_particle_id is None:
+            self.current_particle_id = points[0].data()[0]
+            print(f'Set particle {self.current_particle_id}')
+            return
+
+        # Click on 2nd particle: overwrite with last id
+        id = points[0].data()[0]
+        confirm_dialog = QtWidgets.QMessageBox.question(
+            gv.w, 'Overwrite?',
+            f'Swap particles {id} and {self.current_particle_id}?',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+
+        if confirm_dialog == QtWidgets.QMessageBox.No:
+            self.current_particle_id = None
+            return
+
+        print(f'Swap particles {id} and {self.current_particle_id}')
+        self.particle_id_map[id] = self.current_particle_id
+        self.current_particle_id = None
+
+    def update_roi_display(self):
+        if not(hasattr(self, 'rect_roi')):
+            self.rect_roi = pg.RectROI([0,0], [1,1])
+            self.rect_roi.sigRegionChangeFinished.connect(self.update_roi_params)
+            self.viewer.view.addItem(self.rect_roi)
+
+        if gv.dset is None:
+            return
+
+        # Hide for processed version within ROI
+        if gv.dset.name == f'/{gv.KEY_PROCESSED}':
+            self.viewer.view.removeItem(self.rect_roi)
+            del self.rect_roi
+            return
+
+        if gv.KEY_ATTR_ROI_POS in gv.h5f.attrs and gv.KEY_ATTR_ROI_SIZE in gv.h5f.attrs:
+            pos_ = gv.h5f.attrs[gv.KEY_ATTR_ROI_POS]
+            size_ = gv.h5f.attrs[gv.KEY_ATTR_ROI_SIZE]
+        else:
+            pos_ = [0, 0]
+            size_ = [gv.dset.shape[1], gv.dset.shape[2]]
+
+        self.rect_roi.setPos(pg.Point(pos_))
+        self.rect_roi.setSize(pg.Point(size_))
+
+    @staticmethod
+    def update_roi_params(roi: pg.RectROI):
+        gv.h5f.attrs[gv.KEY_ATTR_ROI_POS] = [roi.pos().x(), roi.pos().y()]
+        gv.h5f.attrs[gv.KEY_ATTR_ROI_SIZE] = [roi.size().x(), roi.size().y()]
+
+    def run_roi_filter(self):
+
+        if not(hasattr(self, 'rect_roi')):
+            print(f'Please select {gv.KEY_ORIGINAL} dataset')
+            return
+
+        data = self.viewer.get_image()
+        img = self.viewer.image_item
+        im, coords = self.rect_roi.getArrayRegion(data, img, returnMappedCoords=True)
+
+        coords = coords.astype(int)
+
+        median_subtraction.run(self.gb_filter.seg_len.value(), self.gb_filter.med_range.value(), coords)
+
+    def run_particle_detection(self):
+        print('Run particle detection')
+
+        invert = self.gb_detection.check_invert.isChecked()
+        diameter = self.gb_detection.spn_diameter.value()
+        minmass = self.gb_detection.spn_minmass.value()
+
+        print(f'Invert {invert}')
+        print(f'Diameter {diameter}')
+        print(f'Minmass {minmass}')
+
+        filepath = f'{gv.filepath}.{gv.EXT_TRACKPY}'
+
+        # If detection file exists, ask if should be removed
+        if os.path.exists(filepath):
+            confirm_dialog = QtWidgets.QMessageBox.question(
+                gv.w, 'Overwrite?',
+                'Previous particle detection exists. Overwrite?',
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel,
+                QtWidgets.QMessageBox.No)
+
+            if confirm_dialog \
+                    in [QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.Cancel]:
+                return
+
+            print('Remove previous detection file')
+            gv.tpf.close()
+            gv.tpf = None
+            os.remove(filepath)
+
+        # Run detection
+        with tp.PandasHDFStoreBig(filepath) as s:
+            tp.batch(gv.h5f[gv.KEY_PROCESSED], diameter, invert=invert, minmass=minmass, output=s, processes='auto')
+
+        # Open detection file
+        gv.tpf = tp.PandasHDFStoreBig(filepath)
+
+    def run_particle_tracking(self):
+        srange = self.gb_tracking.srange.value()
+        smemory = self.gb_tracking.smemory.value()
+
+        self.start_thread(TrackpyLinker, srange, smemory)
+
+        # srange = self.gb_tracking.srange.value()
+        # smemory = self.gb_tracking.smemory.value()
+        #
+        # with tp.PandasHDFStoreBig(f'{gv.filepath}.{gv.EXT_TRACKPY}') as s:
+        #     pred = tp.predict.NearestVelocityPredict()
+        #     for linked in pred.link_df_iter(s, srange, memory=smemory):
+        #         s.put(linked)
+
+    def set_title(self, sub=None):
         sub = ' - {}'.format(sub) if not(sub is None) else ''
         self.setWindowTitle('3D Annotator' + sub)
 
-
-    def updateMedianSubtractionFilter(self):
-        if self.gb_med_norm.isChecked():
-            self.viewer.addImageFilter('median_sub', processing.median_norm_filter, 5, [self.gb_med_norm.med_range.value()])
-
-        else:
-            self.viewer.removeImageFilter('median_sub')
-
-    def updateRotationFilter(self, dir):
-        if not(gv.KEY_ROT in gv.f.attrs):
-            gv.f.attrs[gv.KEY_ROT] = 0
-        gv.f.attrs[gv.KEY_ROT] += dir
-
-        self.viewer.removeImageFilter('rotation')
-        self.viewer.addImageFilter('rotation', np.rot90, 1, [gv.f.attrs[gv.KEY_ROT]])
-        self.viewer.slider.valueChanged.emit(self.viewer.slider.value())
-
-    def exportPositionData(self, scaled=False):
-        print('Export position data')
-        self.rpanel.setEnabled(False)
-        gv.app.processEvents()
-        calib_order = list(gv.f['axis_calibration_limits'].attrs['axis_limit_order'])
-        calib_idcs = gv.f['axis_calibration_indices'][:, 0]
-        calib_scale = gv.f['axis_calibration_scale'][:]
-        calib_limits = gv.f['axis_calibration_limits'][:]
-
-        centroids = gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ]
-        print('Apply scale')
-        new_pos = []
-        calib_idx = -1
-        scale = None
-        limits = None
-        for i in range(centroids.shape[0]):
-            idx = calib_idcs[calib_idcs <= i][-1]
-            if idx > calib_idx:
-                calib_idx = idx
-                _idx = np.array(range(calib_idcs.shape[0]))[calib_idcs == calib_idx][0]
-                # Set scale
-                scale = calib_scale[_idx, :]
-                xscale = scale[calib_order.index('xmax')] - scale[calib_order.index('xmin')]
-                yscale = scale[calib_order.index('ymax')] - scale[calib_order.index('ymin')]
-                # Set limits
-                limits = calib_limits[_idx, :, :]
-                xmin = limits[calib_order.index('xmin'), :]
-                xmax = limits[calib_order.index('xmax'), :]
-                ymin = limits[calib_order.index('ymin'), :]
-                ymax = limits[calib_order.index('ymax'), :]
-
-                print('New calibration starting at frame {}'.format(calib_idx))
-                print('XScale {}, YScale {}, limits {},{},{},{}'.format(xscale, yscale, xmin, xmax, ymin, ymax))
-
-            if calib_idx < 0:
-                print('WARNING: no calibration set for frame {}'.format(i))
-                continue
-
-            ## IMPORTANT: Match particles with objects
-            self.updateParticle2ObjectMatches(i)
-
-            ## Scale centroid coordinates
-            c = centroids[i, np.logical_and(np.isfinite(centroids[i, :, 0]), np.isfinite(centroids[i, :, 1])), :]
-            c[:, 0] -= xmin[0]
-            c[:, 0] /= xmax[0] - xmin[0]
-            c[:, 0] *= xscale
-            c[:, 1] -= ymin[1]
-            c[:, 1] /= ymax[1] - ymin[1]
-            c[:, 1] *= yscale
-            new_pos.append(c)
-
-        data = dict(positions=new_pos, time=gv.f['time'][:])
-
-        filepath = '{}.pickle'.format('.'.join(gv.filepath.split('.')[:-1]))
-        print('Save to {}'.format(filepath))
-        with open(filepath, 'wb') as file:
-            pickle.dump(data, file)
-
-        self.rpanel.setEnabled(True)
-
-    def setDataset(self, dsetName):
-        if gv.f is None:
+    def set_dataset(self, dset_name):
+        if gv.h5f is None:
             gv.dset = None
-            #self.viewer.setDataset(None)
         else:
-            if not(dsetName in gv.f):
-                print('WARNING: dataset {} not in file'.format(dsetName))
+            if not(dset_name in gv.h5f):
+                print(f'WARNING: dataset {dset_name} not in file')
                 return
             else:
-                gv.dset = gv.f[dsetName]
-                #self.viewer.setDataset(gv.f[dsetName])
-        self.viewer.setDataset(gv.dset)
+                gv.dset = gv.h5f[dset_name]
 
-        if dsetName == gv.KEY_ORIGINAL:
-            gv.w.gb_display.btn_raw.setStyleSheet('font-weight:bold;')
-            gv.w.gb_display.btn_processed.setStyleSheet('font-weight:normal;')
-        elif dsetName == gv.KEY_PROCESSED:
-            gv.w.gb_display.btn_processed.setStyleSheet('font-weight:bold;')
-            gv.w.gb_display.btn_raw.setStyleSheet('font-weight:normal;')
+        self.viewer.set_dataset(gv.dset)
+
+        if dset_name == gv.KEY_ORIGINAL:
+            gv.w.gb_display_switch.btn_raw.setStyleSheet('font-weight:bold;')
+            gv.w.gb_display_switch.btn_processed.setStyleSheet('font-weight:normal;')
+        elif dset_name == gv.KEY_PROCESSED:
+            gv.w.gb_display_switch.btn_processed.setStyleSheet('font-weight:bold;')
+            gv.w.gb_display_switch.btn_raw.setStyleSheet('font-weight:normal;')
         else:
-            gv.w.gb_display.btn_raw.setStyleSheet('font-weight:normal;')
-            gv.w.gb_display.btn_processed.setStyleSheet('font-weight:normal;')
+            gv.w.gb_display_switch.btn_raw.setStyleSheet('font-weight:normal;')
+            gv.w.gb_display_switch.btn_processed.setStyleSheet('font-weight:normal;')
+
+        self.update_roi_display()
 
         self.viewer.slider.valueChanged.emit(self.viewer.slider.value())
 
-    def updateParticleMarkers(self):
-        if not(hasattr(self.viewer, 'particles')):
-            self.viewer.particles = dict()
 
-        ### Check if particles are correctly saved to file
-        if gv.f is None \
-                or not(gv.KEY_PARTICLES in gv.f) \
-                or not(gv.KEY_PART_AREA in gv.f) \
-                or not(gv.KEY_PART_CENTR in gv.f):
-            return
+class CustomStdout:
 
+    def __init__(self, queue):
+        self.queue = queue
 
-        frame_idx = self.viewer.slider.value()
-        self.updateParticle2ObjectMatches(frame_idx)
+    def write(self, string):
+        self.queue.put(string)
 
-        ### Display particle markers
-        for i, centroid in enumerate(gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]):
-            centr_name = 'centroid_{}'.format(i)
+class TrackpyLinker(QtCore.QThread):
 
-            ### If centroid not displayed in this frame: skip
-            if np.any(np.isnan(centroid)):
+    def __init__(self, srange, smemory):
+        QtCore.QThread.__init__(self)
+        self.srange = srange
+        self.smemory = smemory
 
-                ### If it was displayed in previous frame: remove and delete
-                if centr_name in self.viewer.particles:
-                    self.viewer.view.removeItem(self.viewer.particles[centr_name])
-                    del self.viewer.particles[centr_name]
+    def run(self):
+        print('Start TrackpyLinker')
 
-                continue
-
-            ### Create new marker
-            if not(centr_name in self.viewer.particles):
+        with tp.PandasHDFStoreBig(f'{gv.filepath}.{gv.EXT_TRACKPY}') as s:
+            pred = tp.predict.NearestVelocityPredict()
+            for linked in pred.link_df_iter(s, self.srange, memory=self.smemory):
+                s.put(linked)
 
 
-                ## Create marker
-                marker = pg.PlotDataItem(x=[centroid[0]], y=[centroid[1]], symbolBrush=None, symbolPen=None, symbol='o', symbolSize=18,
-                                         name=centr_name)
-                self.viewer.particles[centr_name] = marker
-                self.viewer.view.addItem(marker)
+class ExternalWidget(QtWidgets.QWidget):
 
-            ### Set particle pen and coordinates
-            pen = pg.mkPen((255, 70, 20, 255,), width=2, style=QtCore.Qt.DotLine)
-            self.viewer.particles[centr_name].setSymbolPen(pen)
+    def __init__(self, queue):
+        QtWidgets.QWidget.__init__(self)
+        self.queue = queue
+        self.setLayout(QtWidgets.QHBoxLayout())
+        self.txt = QtWidgets.QPlainTextEdit()
+        self.layout().addWidget(self.txt)
 
-            ### Set coordinates of particle centroid
-            self.viewer.particles[centr_name].setData(x=[centroid[0]], y=[centroid[1]])
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.write)
+        self.timer.start(100)
 
+        self.resize(500,500)
+        self.show()
 
-        ### Display all particles matches to objects (in color) on top
-        for i, centroid in enumerate(gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:]):
-            centr_name = 'centroid_for_obj{}'.format(i)
-            if any(np.isnan(centroid)):
-                print('No particle for obj {} in frame {}'.format(i, frame_idx))
-                continue
-
-            ### If centroid not displayed in this frame: skip
-            if np.any(np.isnan(centroid)):
-
-                ### If it was displayed in previous frame: remove and delete
-                if centr_name in self.viewer.particles:
-                    self.viewer.view.removeItem(self.viewer.particles[centr_name])
-                    del self.viewer.particles[centr_name]
-
-                continue
-
-            ### Create new marker
-            if not(centr_name in self.viewer.particles):
-                ## Add marker
-                marker = pg.PlotDataItem(x=[centroid[0]], y=[centroid[1]], symbolBrush=None, symbolPen=None, symbol='o',
-                                         symbolSize=18,
-                                         name=centr_name)
-
-                self.viewer.particles[centr_name] = marker
-                self.viewer.view.addItem(marker)
-
-            ## Set pen and coordinates of particle centroid
-            pen = pg.mkPen((*gv.cmap_lut[i, :3],255,), width=3)
-            self.viewer.particles[centr_name].setSymbolPen(pen)
-            self.viewer.particles[centr_name].setData(x=[centroid[0]+np.random.rand()], y=[centroid[1]+np.random.rand()])
-
-
-    def updateParticle2ObjectMatches(self, frame_idx):
-
-        ### Check if particles and objects are correctly saved to file
-        if gv.f is None \
-                or not(gv.KEY_PARTICLES in gv.f) \
-                or not(gv.KEY_PART_AREA in gv.f) \
-                or not(gv.KEY_PART_CENTR in gv.f) \
-                or not(gv.KEY_OBJLIST in gv.f.attrs) \
-                or len(gv.f.attrs[gv.KEY_OBJLIST]) == 0:
-            return
-
-        if gv.KEY_PART_CENTR_MATCH_TO_OBJ in gv.f \
-            and gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ].shape[1] != len(gv.f.attrs[gv.KEY_OBJLIST]):
-
-            print('Number of objects changed. Reset obj-particle matching.')
-            del gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ]
-
-        if not(gv.KEY_PART_CENTR_MATCH_TO_OBJ in gv.f):
-            gv.f.create_dataset(gv.KEY_PART_CENTR_MATCH_TO_OBJ,
-                                shape=(gv.f[gv.KEY_ORIGINAL].shape[0], len(gv.f.attrs[gv.KEY_OBJLIST]), 2),
-                                dtype = np.float64,
-                                fillvalue = np.nan)
-
-
-
-        obj_pos = np.array([gv.f[obj_name][gv.KEY_NODEINTERP][frame_idx,:] for obj_name in gv.f.attrs[gv.KEY_OBJLIST]])
-        particles = gv.f[gv.KEY_PART_CENTR][frame_idx,:,:]
-
-        if particles.shape[0] < obj_pos.shape[0]:
-            print('WARNING: number of particles in frame {} smaller than number of objects'.format(frame_idx))
-            return
-
-        ### Filter all non-NaN objects for this frame
-        obj_idcs = np.arange(obj_pos.shape[0], dtype=int)[np.isfinite(obj_pos[:,0])]
-        particles = particles[np.isfinite(particles[:,0]),:]
-
-        if particles.shape[0] == 0:
-            return
-
-        use_exclusive_matching = False
-        if use_exclusive_matching:
-            ### Classify particles
-            if obj_idcs.shape[0] > 1:
-                clf = NearestCentroid()
-                clf.fit(obj_pos[obj_idcs,:], obj_idcs)
-                result = clf.predict(particles)
-            elif obj_idcs.shape[0] == 1:
-                result = obj_idcs[0] * np.ones(particles.shape[0])
-            else:
-                return
-
-            winners = list()
-            for i, pos in enumerate(obj_pos):
-                pot_particles = particles[result == i]
-                if pot_particles.shape[0] == 0:
-                    winners.append([np.nan, np.nan])
-                    continue
-
-                dists = [(distance.euclidean(pos, x), j) for j, x in enumerate(pot_particles)]
-                if len(dists) == 0:
-                    continue
-
-                dists = sorted(dists)
-                winners.append(pot_particles[dists[0][1]])
-
-            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = winners
-
-        # Allow for one particle to belong to multiple objects
-        else:
-            dists = distance.cdist(obj_pos, particles, 'euclidean')
-
-            min_dists = dists.min(axis=1)
-            idcs = dists.argmin(axis=1)
-            selected = particles[idcs,:]
-            selected[min_dists > 20,:] = [np.nan, np.nan]  ## Fixed threshold for pixel-distance; TODO: make customizable
-            gv.f[gv.KEY_PART_CENTR_MATCH_TO_OBJ][frame_idx,:,:] = selected
-
-
-
+    def write(self):
+        while not(self.queue.empty()):
+            self.txt.appendPlainText(self.queue.get().replace('\n', ''))
 
 ################################
-### Statusbar widget
+# Statusbar widget
 
 class Statusbar(QtWidgets.QStatusBar):
     def __init__(self):
@@ -518,100 +622,7 @@ class Statusbar(QtWidgets.QStatusBar):
         gv.w.setEnabled(True)
         gv.app.processEvents()
 
-################################
-### Threshold widget
 
-class ThresholdWidget(QtWidgets.QGroupBox):
-    
-    def __init__(self, *args):
-        QtWidgets.QGroupBox.__init__(self, *args)
-
-        self.setCheckable(True)
-        self.setChecked(False)
-        self.setLayout(QtWidgets.QGridLayout())
-        # Threshold
-        self.thresh = QtWidgets.QSpinBox()
-        self.thresh.setMinimumWidth(0)
-        self.thresh.setMaximum(2 ** 8 - 1)
-        self.thresh.setValue(120)
-        self.layout().addWidget(QLabel('Threshold'), 0, 0)
-        self.layout().addWidget(self.thresh, 0, 1)
-        # Maxval
-        self.maxval = QtWidgets.QSpinBox()
-        self.maxval.setMinimumWidth(0)
-        self.maxval.setMaximum(2 ** 8 - 1)
-        self.maxval.setValue(2 ** 8 - 1)
-        self.layout().addWidget(QLabel('Maxval'), 1, 0)
-        self.layout().addWidget(self.maxval, 1, 1)
-        # Type
-        self.threshtype = QtWidgets.QComboBox()
-        self.threshtype.addItems(
-            ['THRESH_BINARY_INV', 'THRESH_BINARY', 'THRESH_TRUNC', 'THRESH_TOZERO_INV', 'THRESH_TOZERO'])
-        self.layout().addWidget(QLabel('Type'), 2, 0)
-        self.layout().addWidget(self.threshtype, 2, 1)
-    
-        ## Adaptive treshold
-        self.gb_adaptive = QtWidgets.QGroupBox('Adaptive')
-        self.gb_adaptive.setLayout(QtWidgets.QGridLayout())
-        self.gb_adaptive.setCheckable(True)
-        self.gb_adaptive.setChecked(False)
-        self.gb_adaptive.method = QtWidgets.QComboBox()
-        self.gb_adaptive.method.addItems(['ADAPTIVE_THRESH_MEAN_C', 'ADAPTIVE_THRESH_GAUSSIAN_C'])
-        self.gb_adaptive.layout().addWidget(QLabel('Method'), 0, 0)
-        self.gb_adaptive.layout().addWidget(self.gb_adaptive.method, 0, 1)
-        self.gb_adaptive.block_size = QtWidgets.QSpinBox()
-        self.gb_adaptive.block_size.setMinimum(3)
-        self.gb_adaptive.block_size.setMaximum(500)
-        self.gb_adaptive.block_size.setSingleStep(2)
-        self.gb_adaptive.block_size.setValue(11)
-        self.gb_adaptive.layout().addWidget(QLabel('Block size'), 1, 0)
-        self.gb_adaptive.layout().addWidget(self.gb_adaptive.block_size, 1, 1)
-        self.gb_adaptive.constant = QtWidgets.QSpinBox()
-        self.gb_adaptive.constant.setMinimum(0)
-        self.gb_adaptive.constant.setMaximum(2 ** 8 - 1)
-        self.gb_adaptive.constant.setValue(5)
-        self.gb_adaptive.layout().addWidget(QLabel('Constant'), 2, 0)
-        self.gb_adaptive.layout().addWidget(self.gb_adaptive.constant, 2, 1)
-        # Add adaptive
-        self.layout().addWidget(self.gb_adaptive, 3, 0, 1, 2)
-
-        # Connect events
-        self.toggled.connect(self.updateThresholdFilter)
-        self.thresh.valueChanged.connect(self.updateThresholdFilter)
-        self.maxval.valueChanged.connect(self.updateThresholdFilter)
-        self.threshtype.currentTextChanged.connect(self.updateThresholdFilter)
-        self.gb_adaptive.toggled.connect(self.updateThresholdFilter)
-        self.gb_adaptive.method.currentTextChanged.connect(self.updateThresholdFilter)
-        self.gb_adaptive.block_size.valueChanged.connect(self.updateThresholdFilter)
-        self.gb_adaptive.constant.valueChanged.connect(self.updateThresholdFilter)
-
-    def getThresholdFilter(self):
-        if self.gb_thresh.gb_adaptive.isChecked():
-            fun = processing.adaptive_threshold_filter
-            args = [self.maxval.value(),
-                    self.gb_adaptive.method.currentText(),
-                    self.threshtype.currentText(),
-                    self.gb_adaptive.block_size.value(),
-                    self.gb_adaptive.constant.value()]
-
-        else:
-            fun = processing.threshold_filter
-            args = [self.thresh.value(),
-                    self.maxval.value(),
-                    self.threshtype.currentText()]
-
-        return fun, args
-
-
-    def updateThresholdFilter(self):
-        if self.gb_thresh.isChecked():
-
-            fun, args = self.getThresholdFilter()
-
-            gv.w.viewer.addImageFilter('threshold', fun, 11, args)
-
-        else:
-            gv.w.viewer.removeImageFilter('threshold')
 
 ################################
 ### Particle detection widget
@@ -622,17 +633,14 @@ class ParticleDetectionWidget(QtWidgets.QGroupBox):
         QtWidgets.QGroupBox.__init__(self, *args)
         ### Checkstate
         self.setCheckable(True)
-        self.toggled.connect(self.updateParticleDetectionFilter)
         self.setChecked(False)
 
         ### Layout
-        self.setLayout(QtWidgets.QGridLayout())
 
         ### Threshold widget
 
         self.thresh_rule = QtWidgets.QComboBox()
         self.thresh_rule.addItems(['>', '<'])
-        self.thresh_rule.currentTextChanged.connect(self.updateParticleDetectionFilter)
         self.thresh_rule.setEnabled(False)
         self.layout().addWidget(QLabel('Threshold rule'), 0, 0)
         self.layout().addWidget(self.thresh_rule, 0, 1)
@@ -641,21 +649,9 @@ class ParticleDetectionWidget(QtWidgets.QGroupBox):
         self.std_mult.setMinimum(0.01)
         self.std_mult.setSingleStep(0.01)
         self.std_mult.setValue(2.5)
-        self.std_mult.valueChanged.connect(self.updateParticleDetectionFilter)
         self.layout().addWidget(QLabel('SD multiplier'), 2, 0)
         self.layout().addWidget(self.std_mult, 2, 1)
 
-        self.btn_run = QtWidgets.QPushButton('Run particle detection')
-        self.btn_run.clicked.connect(particle_detection.run)
-        self.layout().addWidget(self.btn_run, 3, 0, 1, 2)
-
-
-    def updateParticleDetectionFilter(self):
-        if self.isChecked():
-            gv.w.viewer.addImageFilter('particle_detection', processing.particle_filter, 20,
-                                       [self.thresh_rule.currentText(), self.std_mult.value()])
-        else:
-            gv.w.viewer.removeImageFilter('particle_detection')
 
 
 ################################
@@ -668,14 +664,13 @@ Adapted in part from pyqtgraph's ImageView:
 > Copyright 2010  Luke Campagnola
 > Distributed under MIT/X11 license. See license.txt for more information.
 
-
 2020 Tim Hladnik
 """
 
 
 class HDF5ImageView(QtWidgets.QWidget):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, update_fun=None, **kwargs):
         QtWidgets.QWidget.__init__(self, *args, **kwargs)
 
         self.setLayout(QtWidgets.QVBoxLayout())
@@ -685,7 +680,10 @@ class HDF5ImageView(QtWidgets.QWidget):
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.layout().addWidget(self.slider)
-        self.slider.valueChanged.connect(self.updateImage)
+        if update_fun is None:
+            self.slider.valueChanged.connect(self.update_image)
+        else:
+            self.slider.valueChanged.connect(update_fun)
 
         ### Viewbox
         self.view = pg.ViewBox()
@@ -701,8 +699,8 @@ class HDF5ImageView(QtWidgets.QWidget):
         self.scene = self.graphicsView.scene()
 
         ### Image item
-        self.imageItem = pg.ImageItem()
-        self.view.addItem(self.imageItem)
+        self.image_item = pg.ImageItem()
+        self.view.addItem(self.image_item)
 
         #self.imageItem.setImage(np.random.randint(10, size=(500, 600)))
         self.playTimer = QtCore.QTimer()
@@ -713,9 +711,15 @@ class HDF5ImageView(QtWidgets.QWidget):
         self._filters = dict()
         self.playRate = 0
 
-
-    def setDataset(self, dset):
+    def set_dataset(self, dset):
         self.dset = dset
+
+        # TODO: reset range when dataset is changed
+        #self.graphicsView.enableMouse(False)
+        #self.graphicsView.updateMatrix()
+        #import IPython
+        #IPython.embed()
+        #self.graphicsView.setRange(disableAutoPixel=False)
 
         if self.dset is None:
             self.slider.setEnabled(False)
@@ -727,38 +731,26 @@ class HDF5ImageView(QtWidgets.QWidget):
         self.slider.setMaximum(z_len)
         self.slider.setTickInterval(1//(100/z_len))
         self.slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
-        self.updateImage()
+        self.update_image()
 
-    def updateImage(self):
+
+    def get_image(self):
         if self.dset is None:
-            self.imageItem.setImage(np.array([[[0]]]))
-            return
+            return None
 
-        filters = [filt for filt in self._filters.items()]
+        return self.dset[self.slider.value(),:,:]
 
-        im = self.dset[self.slider.value(),:,:,:]
-        if bool(filters):
-            im = im.copy()
+    def set_image(self, im):
+        self.image_item.setImage(im)
 
-            for _, (filt_ord, filt_fun, filt_args) in sorted(filters):
-                im = filt_fun(im, *filt_args)
+    def update_image(self):
 
-        self.imageItem.setImage(im)
+        im = self.get_image()
 
-    def addImageFilter(self, filt_name, filt_fun, filt_order, filt_args):
-        if filt_name in self._filters:
-            self.removeImageFilter(filt_name)
+        if im is None:
+            im = np.array([[[0]]])
 
-        self._filters[filt_name] = (filt_order, filt_fun, filt_args,)
-
-        self.updateImage()
-
-    def removeImageFilter(self, filt_name):
-        if not(filt_name in self._filters):
-            return
-
-        del self._filters[filt_name]
-        self.updateImage()
+        self.image_item.setImage(im)
 
     def play(self, rate=None):
         """Begin automatically stepping frames forward at the given rate (in fps).
@@ -868,7 +860,6 @@ class HDF5ImageView(QtWidgets.QWidget):
 ### Main
 
 if __name__ == '__main__':
-
     ### Create application
     gv.app = QtWidgets.QApplication([])
 

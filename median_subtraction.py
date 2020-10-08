@@ -23,124 +23,182 @@ import time
 
 import gv
 
-def run(segment_length, median_range):
+def run(segment_length, median_range, coords):
+    """
+
+    var coords: array with shape (2,x_dim,y_dim),
+                 where coords[0,:,:] contains the x
+                 and coords[1,:,:] contains the y indices
+    """
+
+    slice_x = coords[0,:,:]
+    slice_y = coords[1,:,:]
+
+    t_dim, x_dim, y_dim, c_dim = (gv.h5f[gv.KEY_ORIGINAL].shape[0],
+                                  coords.shape[1],
+                                  coords.shape[2],
+                                  gv.h5f[gv.KEY_ORIGINAL].shape[-1])
+
+
     print('Run Median subtraction + Range normalization')
+    # Create dataset (delete previous if necessary
+    if gv.KEY_PROCESSED in gv.h5f:
+        del gv.h5f[gv.KEY_PROCESSED]
 
-    ### Create dataset if necessary
-    gv.f.require_dataset(gv.KEY_PROCESSED,
-                         shape=gv.dset.shape,
-                         dtype=np.uint8,
-                         chunks=(1, *gv.f[gv.KEY_ORIGINAL].shape[1:]))
-    t,x,y,c = gv.dset.shape
+    gv.h5f.create_dataset(gv.KEY_PROCESSED,
+                          shape=(t_dim, x_dim, y_dim, c_dim),
+                          dtype=np.uint8,
+                          chunks=(1, x_dim, y_dim, c_dim))
 
-    ### Start timing
+    # Split up into shorter segments for workers
+    segments = np.arange(0, t_dim, segment_length, dtype=int)
+
+    # Print debug info
+    print(f'Video frames {t_dim}')
+    print(f'Video segments{segments}')
+    print(f'Median range {median_range}')
+    print(f'In shape {gv.h5f[gv.KEY_ORIGINAL].shape}')
+    print(f'Out shape {gv.h5f[gv.KEY_PROCESSED].shape}')
+    gv.statusbar.startProgress('Median subtraction + Range Normalization...', len(segments) * 2 - 1)
+
+    # Start timing
     tstart = time.perf_counter()
 
-    ### Close file so subprocesses can open (r) it safely
-    dset_name = gv.dset.name
-    gv.f.close()
+    # Close file so subprocesses can open (r) it safely
+    dset_name = gv.KEY_ORIGINAL
+    filepath = gv.filepath
+    gv.h5f.close()
 
-    ### Create output array
-    c_video_out = RawArray(ctypes.c_uint8, t*x*y*c)
-    video_out = np.frombuffer(c_video_out, dtype=np.uint8).reshape((t,x,y,c))
+    # Create output array
+    c_video_out = RawArray(ctypes.c_uint8, t_dim*x_dim*y_dim*c_dim)
+    video_out = np.frombuffer(c_video_out, dtype=np.uint8).reshape((t_dim, x_dim, y_dim, c_dim))
     video_out[:,:,:] = 0
 
-    ### Progress list
+    # Progress list
     manager = Manager()
     progress = manager.list()
 
-    segments = np.arange(0, t, segment_length, dtype=int)
-    print('Video frames', t)
-    print('Video segments', segments)
-    gv.statusbar.startProgress('Median subtraction + Range Normalization...', len(segments) * 2 - 1)
 
-    process_num = cpu_count()-2
-    print('Using {} subprocesses'.format(process_num))
-    with Pool(process_num, initializer=init_worker, initargs=(c_video_out, dset_name, progress, segment_length, median_range, gv.filepath)) as p:
+    initargs_ = (c_video_out,
+                 (t_dim, x_dim, y_dim, c_dim),
+                  slice_x,
+                  slice_y,
+                  dset_name,
+                  progress,
+                  segment_length,
+                  median_range,
+                  filepath)
 
-        print('Calculate medians')
-        r1 = p.map_async(worker_calc_pixel_median, segments)
-        while not(r1.ready()):
-            time.sleep(1/10)
-            gv.statusbar.setProgress(len(progress))
+    if False:
+        init_worker(*initargs_)
+        worker_calc_pixel_median(0)
+    else:
+        process_num = cpu_count()-2
+        print('Using {} subprocesses'.format(process_num))
+        with Pool(process_num, initializer=init_worker, initargs=initargs_) as p:
 
+            print('Calculate medians')
+            r1 = p.map_async(worker_calc_pixel_median, segments)
+            while not(r1.ready()):
+                time.sleep(1/10)
+                gv.statusbar.setProgress(len(progress))
 
-    gv.statusbar.endProgress()
+        gv.statusbar.endProgress()
 
-    gv.f = h5py.File(gv.filepath, 'a')
+    gv.h5f = h5py.File(gv.filepath, 'a')
 
     print('Time for execution:', time.perf_counter()-tstart)
 
     ### Save to file
     gv.statusbar.startBlocking('Saving...')
-    gv.f[gv.KEY_PROCESSED][:] = video_out
+    gv.h5f[gv.KEY_PROCESSED][:] = video_out
     gv.statusbar.setReady()
-    gv.w.setDataset(gv.KEY_PROCESSED)
-    gv.w.gb_med_norm.setChecked(False)
+    gv.w.set_dataset(gv.KEY_PROCESSED)
+
 
 ################
 ## Worker functions
 
 # Globals
 c_video_out = None
-c_minmax_val = None
-data_shape = None
-array_out = None
-index_list = None
-filepath = None
-f = None
+video_out_shape = None
+slice_x = None
+slice_y = None
 dset_name = None
-median_range = None
+index_list = None
 segment_length = None
+median_range = None
+filepath = None
 
-def init_worker(cvidout, dsetn, idx_list, slength, mrange, fpath):
-    global c_video_out, array_out, dset_name, data_shape, index_list, median_range, segment_length, filepath, f
-    median_range = mrange
-    filepath = fpath
+f = None
+array_out = None
+sub_array_out = None
+
+def init_worker(_c_video_out,
+                _video_out_shape,
+                _slice_x,
+                _slice_y,
+                _dset_name,
+                _index_list,
+                _segment_length,
+                _median_range,
+                _filepath):
+    global c_video_out, video_out_shape, slice_x, slice_y, dset_name, index_list, segment_length, median_range, filepath, \
+        f, array_out, sub_array_out
+
+    c_video_out = _c_video_out
+    video_out_shape = _video_out_shape
+    slice_x = _slice_x
+    slice_y = _slice_y
+    dset_name = _dset_name
+    index_list = _index_list
+    segment_length = _segment_length
+    median_range = _median_range
+    filepath = _filepath
+
+    # Open file
     f = h5py.File(filepath, 'r')
-    c_video_out = cvidout
-    dset_name = dsetn
-    data_shape = f[dset_name].shape
-    array_out = np.frombuffer(c_video_out, dtype=np.uint8).reshape(data_shape)
-    index_list = idx_list
-    segment_length = slength
+    # Set subset array
+    sub_array_out = np.empty((segment_length, *video_out_shape[1:]))
+    # Set shared out array
+    array_out = np.frombuffer(c_video_out, dtype=np.uint8).reshape(video_out_shape)
 
 def worker_calc_pixel_median(start_idx):
-    global array_out, data_shape, dset_name, index_list, segment_length, median_range, f
+    global array_out, sub_array_out, video_out_shape, dset_name, index_list, segment_length, median_range, f, slice_x, slice_ye
     end_idx = start_idx + segment_length
     print('Slice {} to {}'.format(start_idx, end_idx))
 
     index_list.append(('median_started', start_idx, end_idx))
 
 
-    medrange = 20
-    out = np.empty((segment_length, *data_shape[1:]))
+    # Calculate running median for each pixel in frame
     for i in range(start_idx, end_idx):
 
-        start = i - medrange
-        end = i + medrange
+        start = i - median_range
+        end = i + median_range
         if start < 0:
             end -= start
             start = 0
 
-        if end > data_shape[0]:
-            start -= end - data_shape[0]
-            end = data_shape[0]
+        if end > video_out_shape[0]:
+            start -= end - video_out_shape[0]
+            end = video_out_shape[0]
 
-        out[i-start_idx,:,:,:] = f[dset_name][i,:,:,:] - np.median(f[dset_name][start:end,:,:,:], axis=0)
-        #array_out[i, :, :, :] = median_norm(f[dset_name][i, :, :, :], f[dset_name][start:end, :, :, :])
 
-    out -= out.min()
-    out /= out.max()
-    array_out[start_idx:end_idx,:,:,:] = (out * (2**8-1)).astype(np.uint8)
+        frame = f[dset_name][i, :, :, :]
+        sub_frame = frame[slice_x, slice_y, :]
+
+        frames = f[dset_name][start:end, :, :, :]
+        sub_frames = frames[:, slice_x, slice_y, :]
+
+        sub_array_out[i-start_idx, :, :, :] = sub_frame - np.median(sub_frames, axis=0)
+
+    # Normalize
+    sub_array_out -= sub_array_out.min()
+    sub_array_out /= sub_array_out.max()
+    array_out[start_idx:end_idx,:,:] = (sub_array_out * (2**8-1)).astype(np.uint8)
 
     print('Slice {} to {} finished'.format(start_idx, end_idx, 'finished'))
 
     index_list.append(('median_finished', start_idx, end_idx))
     return start_idx
-
-def median_norm(frame, slice):
-    out = frame - np.median(slice, axis=0).astype(np.float32)
-    out -= out.min()
-    out /= out.max()
-    return (out * (2**8-1)).astype(np.uint8)

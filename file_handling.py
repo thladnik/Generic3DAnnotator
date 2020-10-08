@@ -21,65 +21,86 @@ import os
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QLabel
 import time
+from trackpy import PandasHDFStoreBig
 
 import gv
-import object_handling
 
 ################################################################
-### File handling functions
+# File handling functions
 
-def open_file():
 
-    ### Query file path
+def open_hdf5():
+
+    # Query file path
     fileinfo = QtWidgets.QFileDialog.getOpenFileName(gv.w, 'Open file...', gv.open_dir,
                                                      'Imported HDF5 (*.hdf5);;')
 
     if fileinfo == ('', ''):
         return
 
-    ### First close any open file
+    # First close any open file
     close_file()
 
-    ### Set filepath
+    # Set filepath
     gv.filepath = fileinfo[0]
     print('Open file {}'.format(gv.filepath))
 
-    ### Open file
-    gv.f = h5py.File(gv.filepath, 'a')
+    # Open files
+    gv.h5f = h5py.File(gv.filepath, 'a')
+    open_trackpy()
 
     ### Set video
-    gv.w.setDataset(gv.KEY_ORIGINAL)
-    gv.w.updateRotationFilter(0)
-    # main.update_axes_table()
-
-    gv.w.setTitle(gv.filepath)
+    gv.w.set_dataset(gv.KEY_ORIGINAL)
+    gv.w.set_title(gv.filepath)
+    gv.w.update_roi_display()
 
     gv.w.rpanel.setEnabled(True)
 
-    #gv.w.updateParticleMarkers()
+
+def open_trackpy():
+
+    if gv.filepath is None:
+        return
+
+    filepath = f'{gv.filepath}.{gv.EXT_TRACKPY}'
+    if not(os.path.exists(filepath)):
+        print('No trackpy container found.')
+        return
+
+    if gv.tpf is not None:
+        gv.tpf.close()
+
+    print(f'Open trackpy container {filepath}')
+    gv.tpf = PandasHDFStoreBig(filepath, 'a')
 
 
 def close_file():
-    if not(gv.f is None):
-        print('Close file {}'.format(gv.f.filename))
-        gv.f.close()
-        gv.f = None
+    if gv.h5f is not None:
+        print(f'Close file {gv.h5f.filename}')
+        gv.h5f.close()
+        gv.h5f = None
 
+    if gv.tpf is not None:
+        print(f'Close file {gv.tpf.filename}')
+        gv.tpf.close()
+        gv.tpf = None
 
-    object_handling.clear_objects()
 
     gv.filepath = None
-    gv.w.setTitle()
-    gv.w.setDataset(None)
+    gv.w.set_title()
+    gv.w.set_dataset(None)
     gv.w.rpanel.setEnabled(False)
 
 
 ################################################################
-### Video import functions
+# Video import functions
+
 
 def import_file():
     """Import a new video/image sequence-type file and create mem-mapped file
     """
+    # TODO: add rotate ON import
+    #       do NOT do rotations AFTER importing, it's not worth the trouble
 
     fileinfo = QtWidgets.QFileDialog.getOpenFileName(gv.w, 'Open file...', gv.open_dir,
                                                      '[Monochrome] Video Files (*.avi; *.mp4);;'
@@ -109,13 +130,13 @@ def import_file():
                                                         QtWidgets.QMessageBox.No)
 
         if confirm_dialog == QtWidgets.QMessageBox.No:
-            open_file()
+            open_hdf5()
             return
         elif confirm_dialog == QtWidgets.QMessageBox.Cancel:
             return
 
     ### Open file
-    gv.f = h5py.File(gv.filepath, 'w')
+    gv.h5f = h5py.File(gv.filepath, 'w')
 
     ################
     ### IMPORT
@@ -165,19 +186,19 @@ def import_file():
 
     for key, field in dialog.fields.items():
         if hasattr(field, 'value'):
-            gv.f.attrs[key] = field.value()
+            gv.h5f.attrs[key] = field.value()
         elif hasattr(field, 'text'):
-            gv.f.attrs[key] = field.text()
+            gv.h5f.attrs[key] = field.text()
 
     ### Set indices and timepoints
-    gv.f.create_dataset(gv.KEY_FRAMEIDCS, data=np.arange(gv.f[gv.KEY_ORIGINAL].shape[0]), dtype=np.uint64)
-    gv.f.create_dataset(gv.KEY_TIME, data=gv.f[gv.KEY_FRAMEIDCS], dtype=np.float64)
-    if gv.KEY_FPS in gv.f.attrs:
-        gv.f[gv.KEY_TIME][:] = gv.f[gv.KEY_TIME][:] / gv.f.attrs[gv.KEY_FPS]
+    gv.h5f.create_dataset(gv.KEY_FRAMEIDCS, data=np.arange(gv.h5f[gv.KEY_ORIGINAL].shape[0]), dtype=np.uint64)
+    gv.h5f.create_dataset(gv.KEY_TIME, data=gv.h5f[gv.KEY_FRAMEIDCS], dtype=np.float64)
+    if gv.KEY_ATTR_FPS in gv.h5f.attrs:
+        gv.h5f[gv.KEY_TIME][:] = gv.h5f[gv.KEY_TIME][:] / gv.h5f.attrs[gv.KEY_ATTR_FPS]
 
     ### Set video
-    gv.w.setTitle(gv.filepath)
-    gv.w.setDataset(gv.KEY_ORIGINAL)
+    gv.w.set_title(gv.filepath)
+    gv.w.set_dataset(gv.KEY_ORIGINAL)
 
     gv.w.rpanel.setEnabled(True)
 
@@ -193,39 +214,39 @@ def import_avi(videopath, format):
         mono = True
 
     tstart = time.time()
-    ### Open video file
+    # Open video file
     vhandle = av.open(videopath)
     v = vhandle.streams.video[0]
 
     props = {
-        gv.KEY_FPS: int(round(v.base_rate.numerator / v.base_rate.denominator)),
+        gv.KEY_ATTR_FPS: int(round(v.base_rate.numerator / v.base_rate.denominator)),
     }
 
-    ### Import frames
+    # Import frames
     t_dim = v.frames
 
     gv.statusbar.startProgress('Importing {}'.format(videopath), t_dim)
 
     for i, image in enumerate(vhandle.decode()):
 
-        ### Get image ndarray
+        # Get image ndarray
         im = np.asarray(image.to_image()).astype(np.uint8)
 
-        ### Convert to monochrome if necessary
+        # Convert to monochrome if necessary
         if mono:
             im = im[:, :, 0][:, :, np.newaxis]
 
-        gv.f.require_dataset(gv.KEY_ORIGINAL,
-                             shape=(t_dim, *im.shape),
-                             dtype=np.uint8,
-                             chunks=(1, *im.shape),
-                             compression=None)
+        gv.h5f.require_dataset(gv.KEY_ORIGINAL,
+                               shape=(t_dim, *im.shape),
+                               dtype=np.uint8,
+                               chunks=(1, *im.shape),
+                               compression=None)
 
-        ### Update progress
+        # Update progress
         gv.statusbar.setProgress(i)
         gv.app.processEvents()
-        ### Set frame data
-        gv.f[gv.KEY_ORIGINAL][i, :, :, :] = im[:, :, :]
+        # Set frame data
+        gv.h5f[gv.KEY_ORIGINAL][i, :, :, :] = im[:, :, :]
 
     print('Import finished after {:.2f} seconds'.format(time.time() - tstart))
 
