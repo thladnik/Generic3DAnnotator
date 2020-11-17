@@ -20,19 +20,29 @@ from matplotlib import cm
 from PyQt5.QtWidgets import QApplication
 from numpy import ndarray
 from trackpy import PandasHDFStoreBig
+from pandas import DataFrame
 
 from gui import MainWindow, Statusbar
 
 ### Key definitions
 KEY_PROCESSED: str = 'processed'
 KEY_ORIGINAL: str = 'original'
+KEY_FRAME_IDCS: str = 'indices'
 KEY_TIME: str = 'time'
-KEY_ATTRROT: str = 'rotation'
+
+KEY_ATTR_ROT: str = 'rotation'
 KEY_ATTR_FPS: str = 'fps'
+KEY_ATTR_FILT_SEGLEN: str = 'filter_segment_length'
+KEY_ATTR_FILT_MEDRANGE: str = 'filter_median_range'
+KEY_ATTR_FILT_ROI_POS: str = 'rect_roi_pos'
+KEY_ATTR_FILT_ROI_SIZE: str = 'rect_roi_size'
+KEY_ATTR_DETECT_INV: str = 'detection_invert'
+KEY_ATTR_DETECT_DIA: str = 'detection_diameter'
+KEY_ATTR_DETECT_MINMASS: str = 'detection_minmass'
+KEY_ATTR_TRACK_SRANGE: str = 'tracking_search_range'
+KEY_ATTR_TRACK_SMEM: str = 'tracking_search_memory'
 
-KEY_ATTR_ROI_POS: str = 'rect_roi_pos'
-KEY_ATTR_ROI_SIZE: str = 'rect_roi_size'
-
+EXT_ANNOT: str = 'gaf'
 EXT_TRACKPY: str = 'trackpy'
 EXT_ID_MAP: str = 'idmap'
 
@@ -46,6 +56,7 @@ filepath: str = None
 open_dir: str = None
 h5f: File = None
 tpf: PandasHDFStoreBig = None
+particle_map: DataFrame = None
 dset: Dataset = None
 cur_obj_name: str = None
 set_axes: bool = False
