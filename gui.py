@@ -75,7 +75,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.particle_markers = pg.ScatterPlotItem(size=10,
                                                    pen=pg.mkPen(None),
                                                    brush=pg.mkBrush(255, 0, 0, 255))
-        self.particle_markers.sigClicked.connect(self.clicked_on_particle)
+        #self.particle_markers.sigClicked.connect(self.clicked_on_particle)
         self.viewer.processed_view.addItem(self.particle_markers)
 
         ################
@@ -116,19 +116,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rpanel.layout().addWidget(self.wdgt_phases)
 
         # Pipeline header
+        self.pipe_label = QtWidgets.QLabel('Processing pipeline')
+        self.pipe_label.setStyleSheet('font-weight:bold;')
+        self.rpanel.layout().addWidget(self.pipe_label)
+
         self.wdgt_pipe_header = QtWidgets.QWidget()
         self.wdgt_pipe_header.setLayout(QtWidgets.QHBoxLayout())
         self.rpanel.layout().addWidget(self.wdgt_pipe_header)
-        self.wdgt_pipe_header.label = QtWidgets.QLabel('Processing pipeline')
-        self.wdgt_pipe_header.label.setStyleSheet('font-weight:bold;')
-        self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.label)
-        hspacer = QtWidgets.QSpacerItem(1, 1, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.wdgt_pipe_header.layout().addItem(hspacer)
+        # This phase
         self.wdgt_pipe_header.btn_run_this_phase = QtWidgets.QPushButton('Run THIS')
         self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.btn_run_this_phase)
+        self.wdgt_pipe_header.btn_run_this_phase.clicked.connect(self.run_current_phase)
+        # All phases
         self.wdgt_pipe_header.btn_run_all_phases = QtWidgets.QPushButton('Run ALL')
         self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.btn_run_all_phases)
         self.wdgt_pipe_header.btn_run_all_phases.clicked.connect(self.run_all_phases)
+        # All phases w/o filtering
+        self.wdgt_pipe_header.btn_run_all_wo_filter = QtWidgets.QPushButton('Run ALL (w/o filter)')
+        self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.btn_run_all_wo_filter)
+        self.wdgt_pipe_header.btn_run_all_wo_filter.clicked.connect(self.run_all_phases_wo_filter)
+
+        hspacer = QtWidgets.QSpacerItem(1, 1, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        self.wdgt_pipe_header.layout().addItem(hspacer)
 
         ########
         # Import image sequence
@@ -384,7 +393,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return int(particle_id)
 
-    def run_pipeline(self, group_names: list):
+    def run_pipeline(self, group_names: list, _filter=True, _detection=True, _tracking=True):
 
         filter_params = dict()
         filter_params['roi_xlen'] = gv.h5f.attrs[gv.KEY_ATTR_ROI_XLEN]
@@ -408,39 +417,42 @@ class MainWindow(QtWidgets.QMainWindow):
             self.wdgt_phases.cb_phases.setCurrentText(name)
             gv.app.processEvents()
 
-            # Set ROI
-            self.gb_roi.dsp_xlen.setValue(filter_params['roi_xlen'])
-            self.gb_roi.dsp_ylen.setValue(filter_params['roi_ylen'])
-            self.viewer.rect_roi.setPos(filter_params['roi_pos'])
-            self.viewer.rect_roi.setSize(filter_params['roi_size'])
-            self.gb_filter.seg_len.setValue(filter_params['seg_len'])
-            self.gb_filter.med_range.setValue(filter_params['med_range'])
-            # Run
-            #self.gb_filter.btn_run.clicked.emit()
-            self.run_roi_filter()
+            if _filter:
+                # Set ROI
+                self.gb_roi.dsp_xlen.setValue(filter_params['roi_xlen'])
+                self.gb_roi.dsp_ylen.setValue(filter_params['roi_ylen'])
+                self.viewer.rect_roi.setPos(filter_params['roi_pos'])
+                self.viewer.rect_roi.setSize(filter_params['roi_size'])
+                self.gb_filter.seg_len.setValue(filter_params['seg_len'])
+                self.gb_filter.med_range.setValue(filter_params['med_range'])
+                # Run
+                self.run_roi_filter()
 
-            # Set detection
-            self.gb_detection.check_invert.setCheckState(filter_params['detect_invert'])
-            self.gb_detection.spn_diameter.setValue(filter_params['detect_diameter'])
-            self.gb_detection.spn_minmass.setValue(filter_params['detect_minmass'])
-            # Run
-            #self.gb_detection.btn_run.clicked.emit()
-            self.run_particle_detection(overwrite=True)
+            if _detection:
+                # Set detection
+                self.gb_detection.check_invert.setCheckState(filter_params['detect_invert'])
+                self.gb_detection.spn_diameter.setValue(filter_params['detect_diameter'])
+                self.gb_detection.spn_minmass.setValue(filter_params['detect_minmass'])
+                # Run
+                self.run_particle_detection(overwrite=True)
 
-            # Set tracking
-            self.gb_tracking.spn_srange.setValue(filter_params['track_srange'])
-            self.gb_tracking.spn_smemory.setValue(filter_params['track_smemory'])
-            # Run
-            #self.gb_tracking.btn_run.clicked.emit()
-            self.run_particle_tracking()
+            if _tracking:
+                # Set tracking
+                self.gb_tracking.spn_srange.setValue(filter_params['track_srange'])
+                self.gb_tracking.spn_smemory.setValue(filter_params['track_smemory'])
+                # Run
+                self.run_particle_tracking()
 
     def run_current_phase(self):
         phases = [self.wdgt_phases.cb_phases.currentText()]
         self.run_pipeline(phases)
 
-    def run_all_phases(self):
+    def run_all_phases(self, **kwargs):
         phases = [self.wdgt_phases.cb_phases.itemText(i) for i in range(self.wdgt_phases.cb_phases.count())]
-        self.run_pipeline(phases)
+        self.run_pipeline(phases, **kwargs)
+
+    def run_all_phases_wo_filter(self):
+        self.run_all_phases(_filter=None)
 
 ################
 # UPDATE PLOT
@@ -623,63 +635,63 @@ class MainWindow(QtWidgets.QMainWindow):
 ################
 # SORTING
 
-    def start_particle_id_sorting(self):
-        # Load id mapping file
-        filepath = f'{gv.filepath}.{gv.EXT_TRACKPY}.{gv.EXT_ID_MAP}'
-
-        # Create if it doesn't exist yet (on first sorting)
-        if not (os.path.exists(filepath)):
-            print(f'Create {gv.EXT_ID_MAP} file')
-            dfs = list()
-            for frame_idx in gv.tpf.frames:
-                df = gv.tpf.get(frame_idx)
-                df = df.reset_index()  # Important for sorting, else duplicate indices
-                print(f'Fetch particle ids for frame {frame_idx}. Shape {df.shape}')
-                dfs.append(df[['frame', 'particle']])
-
-            new_df = pd.concat(dfs)
-            new_df.insert(len(new_df.keys()), 'new_particle', new_df['particle'])
-            new_df.to_hdf(filepath, 'df')
-
-        gv.particle_map = pd.read_hdf(filepath, 'df')
-
-        self.gb_sorting.btn_save.setEnabled(True)
-
-    def save_particle_id_sorting(self):
-        print(self.particle_id_map)
-
-        self.particle_id_map = None
-        # TODO: iterate over frames, map ids and save to file
-        self.gb_sorting.toggle_sorting.setChecked(False)
-
-    def clicked_on_particle(self, obj, points):
-        # Only if sorting is toggled
-        if not (self.gb_sorting.toggle_sorting.isChecked()):
-            return
-
-        # Click on 1st particle: copy id
-        if not (hasattr(self, 'current_particle_id')) \
-                or self.current_particle_id is None:
-            self.current_particle_id = points[0].data()[0]
-            print(f'Set particle {self.current_particle_id}')
-            return
-
-        # Click on 2nd particle: overwrite with last id
-        id = points[0].data()[0]
-        confirm_dialog = QtWidgets.QMessageBox.question(
-            gv.w, 'Overwrite?',
-            f'Set particle {id} to {self.current_particle_id}?',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No)
-
-        if confirm_dialog == QtWidgets.QMessageBox.No:
-            self.current_particle_id = None
-            return
-
-        print(f'Set particle {id} to {self.current_particle_id}')
-        gv.particle_map.loc[(gv.particle_map['particle'] == self.current_particle_id), 'new_particle'] = id
-        # self.particle_id_map[id] = self.current_particle_id
-        self.current_particle_id = None
+    # def start_particle_id_sorting(self):
+    #     # Load id mapping file
+    #     filepath = f'{gv.filepath}.{gv.EXT_TRACKPY}.{gv.EXT_ID_MAP}'
+    #
+    #     # Create if it doesn't exist yet (on first sorting)
+    #     if not (os.path.exists(filepath)):
+    #         print(f'Create {gv.EXT_ID_MAP} file')
+    #         dfs = list()
+    #         for frame_idx in gv.tpf.frames:
+    #             df = gv.tpf.get(frame_idx)
+    #             df = df.reset_index()  # Important for sorting, else duplicate indices
+    #             print(f'Fetch particle ids for frame {frame_idx}. Shape {df.shape}')
+    #             dfs.append(df[['frame', 'particle']])
+    #
+    #         new_df = pd.concat(dfs)
+    #         new_df.insert(len(new_df.keys()), 'new_particle', new_df['particle'])
+    #         new_df.to_hdf(filepath, 'df')
+    #
+    #     gv.particle_map = pd.read_hdf(filepath, 'df')
+    #
+    #     self.gb_sorting.btn_save.setEnabled(True)
+    #
+    # def save_particle_id_sorting(self):
+    #     print(self.particle_id_map)
+    #
+    #     self.particle_id_map = None
+    #     # TODO: iterate over frames, map ids and save to file
+    #     self.gb_sorting.toggle_sorting.setChecked(False)
+    #
+    # def clicked_on_particle(self, obj, points):
+    #     # Only if sorting is toggled
+    #     if not (self.gb_sorting.toggle_sorting.isChecked()):
+    #         return
+    #
+    #     # Click on 1st particle: copy id
+    #     if not (hasattr(self, 'current_particle_id')) \
+    #             or self.current_particle_id is None:
+    #         self.current_particle_id = points[0].data()[0]
+    #         print(f'Set particle {self.current_particle_id}')
+    #         return
+    #
+    #     # Click on 2nd particle: overwrite with last id
+    #     id = points[0].data()[0]
+    #     confirm_dialog = QtWidgets.QMessageBox.question(
+    #         gv.w, 'Overwrite?',
+    #         f'Set particle {id} to {self.current_particle_id}?',
+    #         QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+    #         QtWidgets.QMessageBox.No)
+    #
+    #     if confirm_dialog == QtWidgets.QMessageBox.No:
+    #         self.current_particle_id = None
+    #         return
+    #
+    #     print(f'Set particle {id} to {self.current_particle_id}')
+    #     gv.particle_map.loc[(gv.particle_map['particle'] == self.current_particle_id), 'new_particle'] = id
+    #     # self.particle_id_map[id] = self.current_particle_id
+    #     self.current_particle_id = None
 
 
 ################################
