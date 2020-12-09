@@ -67,10 +67,7 @@ def open_file():
     gv.w.rpanel.setEnabled(True)
 
 def get_trackpy_path():
-    if gv.h5f.name == '/':
-        filepath = f'{gv.filepath}'.replace(f'.{gv.EXT_ANNOT}', f'.{gv.EXT_TRACKPY}')
-    else:
-        filepath = f'{gv.filepath}_{gv.h5f.name.replace("/", "")}'.replace(f'.{gv.EXT_ANNOT}', f'.{gv.EXT_TRACKPY}')
+    filepath = f'{gv.filepath[:-(len(gv.EXT_ANNOT)+1)]}_{gv.h5f.name.replace("/", "")}.{gv.EXT_TRACKPY}'
 
     return filepath
 
@@ -221,7 +218,7 @@ def import_file():
     # Set video
     gv.w.set_title(gv.filepath)
     gv.w.viewer.slider.setValue(0)
-    #gv.w.set_dataset(gv.KEY_ORIGINAL)
+    gv.w.update_ui()
 
     gv.w.rpanel.setEnabled(True)
 
@@ -277,9 +274,14 @@ def import_hdf5(hdf5path, format):
     dialog = QtWidgets.QDialog(gv.w)
     dialog.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.FramelessWindowHint)
     dialog.setLayout(QtWidgets.QGridLayout())
+
+    # Switch file references for viewer to work
+    _h5f = gv.h5f
+    gv.h5f = group
+
     # Set image view
     from gui import HDF5ImageView
-    dialog.imview = HDF5ImageView()
+    dialog.imview = HDF5ImageView(original_name=frame_name)
     # Set rotation/flip
     dialog.cb_rotation = QtWidgets.QComboBox()
     dialog.cb_rotation.addItems(['None', '90CCW', '180', '270CCW'])
@@ -294,15 +296,19 @@ def import_hdf5(hdf5path, format):
     dialog.check_flip_lr.stateChanged.connect(lambda: dialog.imview.set_flip_lr(dialog.check_flip_lr.isChecked()))
     dialog.check_flip_lr.stateChanged.connect(dialog.imview.update_image)
     dialog.layout().addWidget(dialog.check_flip_lr, 0, 2)
-    #dialog.imview.set_dataset(group[frame_name])
     dialog.imview.setFixedSize(*[max(group[frame_name].shape)] * 2)
     dialog.layout().addWidget(dialog.imview, 1, 0)
     dialog.btn_submit = QtWidgets.QPushButton('Confirm')
     dialog.btn_submit.clicked.connect(dialog.accept)
     dialog.layout().addWidget(dialog.btn_submit, 2, 0)
+    # Update
+    dialog.imview.update_image()
 
     if not (dialog.exec_() == QtWidgets.QDialog.Accepted):
         raise Exception('Need to confirm rotation/flip')
+
+    # Switch file reference back
+    gv.h5f = _h5f
 
     # Import
     for j, phase_name in enumerate(phases):

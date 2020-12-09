@@ -21,7 +21,6 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QLabel
 import pyqtgraph as pg
 import time
-import pickle
 import trackpy as tp
 import os
 from queue import Queue
@@ -31,6 +30,7 @@ import sys
 import gv
 import file_handling
 import median_subtraction
+import util
 
 
 ################################
@@ -49,10 +49,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.cw)
         self.cw.setLayout(QtWidgets.QGridLayout())
 
-        # Threading
-        self.queue = Queue()
-        self.custom_stdout = CustomStdout(self.queue)
-
         ################
         # Create menu
 
@@ -67,10 +63,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mb_file_import.triggered.connect(file_handling.import_file)
         self.mb_file_export = self.mb_file.addAction('Export scaled position data')
         self.mb_file_export.setShortcut('Ctrl+E')
-        self.mb_file_export.triggered.connect(lambda: self.exportPositionData(scaled=True))
+        #self.mb_file_export.triggered.connect(lambda: self.exportPositionData(scaled=True))
         self.mb_file_close = self.mb_file.addAction('Close file')
         self.mb_file_close.triggered.connect(file_handling.close_file)
-        self.mb_edit = self.mb.addMenu('Edit')
 
         ################
         # Create ImageView
@@ -94,44 +89,89 @@ class MainWindow(QtWidgets.QMainWindow):
         ########
         # Phase selection
 
-        self.rpanel.layout().addWidget(QLabel('Select phase'))
-        self.cb_phase_select = QtWidgets.QComboBox()
-        self.cb_phase_select.currentTextChanged.connect(self.set_group)
-        self.rpanel.layout().addWidget(self.cb_phase_select)
+        self.wdgt_phases = QtWidgets.QWidget()
+        self.wdgt_phases.setLayout(QtWidgets.QHBoxLayout())
+        label_phases = QLabel('Select phases')
+        label_phases.setStyleSheet('font-weight:bold;')
+        self.rpanel.layout().addWidget(label_phases)
+        self.wdgt_phases.btn_first = QtWidgets.QPushButton('<<')
+        self.wdgt_phases.btn_first.setFixedWidth(30)
+        self.wdgt_phases.btn_first.clicked.connect(lambda: self.change_current_phase(-10**10))
+        self.wdgt_phases.layout().addWidget(self.wdgt_phases.btn_first)
+        self.wdgt_phases.btn_previous = QtWidgets.QPushButton('<')
+        self.wdgt_phases.btn_previous.setFixedWidth(30)
+        self.wdgt_phases.btn_previous.clicked.connect(lambda: self.change_current_phase(-1))
+        self.wdgt_phases.layout().addWidget(self.wdgt_phases.btn_previous)
+        self.wdgt_phases.cb_phases = QtWidgets.QComboBox()
+        self.wdgt_phases.cb_phases.currentTextChanged.connect(self.set_group)
+        self.wdgt_phases.layout().addWidget(self.wdgt_phases.cb_phases)
+        self.wdgt_phases.btn_next = QtWidgets.QPushButton('>')
+        self.wdgt_phases.btn_next.setFixedWidth(30)
+        self.wdgt_phases.btn_next.clicked.connect(lambda: self.change_current_phase(1))
+        self.wdgt_phases.layout().addWidget(self.wdgt_phases.btn_next)
+        self.wdgt_phases.btn_last = QtWidgets.QPushButton('>>')
+        self.wdgt_phases.btn_last.setFixedWidth(30)
+        self.wdgt_phases.btn_last.clicked.connect(lambda: self.change_current_phase(10**10))
+        self.wdgt_phases.layout().addWidget(self.wdgt_phases.btn_last)
+        self.rpanel.layout().addWidget(self.wdgt_phases)
+
+        # Pipeline header
+        self.wdgt_pipe_header = QtWidgets.QWidget()
+        self.wdgt_pipe_header.setLayout(QtWidgets.QHBoxLayout())
+        self.rpanel.layout().addWidget(self.wdgt_pipe_header)
+        self.wdgt_pipe_header.label = QtWidgets.QLabel('Processing pipeline')
+        self.wdgt_pipe_header.label.setStyleSheet('font-weight:bold;')
+        self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.label)
+        hspacer = QtWidgets.QSpacerItem(1, 1, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        self.wdgt_pipe_header.layout().addItem(hspacer)
+        self.wdgt_pipe_header.btn_run_this_phase = QtWidgets.QPushButton('Run THIS')
+        self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.btn_run_this_phase)
+        self.wdgt_pipe_header.btn_run_all_phases = QtWidgets.QPushButton('Run ALL')
+        self.wdgt_pipe_header.layout().addWidget(self.wdgt_pipe_header.btn_run_all_phases)
+        self.wdgt_pipe_header.btn_run_all_phases.clicked.connect(self.run_all_phases)
 
         ########
-        # Display switch
-        self.gb_display_switch = QtWidgets.QGroupBox('Switch display source')
-        self.gb_display_switch.setLayout(QtWidgets.QVBoxLayout())
-        self.gb_display_switch.btn_raw = QtWidgets.QPushButton('Raw')
-        self.gb_display_switch.btn_raw.clicked.connect(lambda: self.set_dataset(gv.KEY_ORIGINAL))
-        self.gb_display_switch.layout().addWidget(self.gb_display_switch.btn_raw)
-        self.gb_display_switch.btn_processed = QtWidgets.QPushButton('Processed')
-        self.gb_display_switch.btn_processed.clicked.connect(lambda: self.set_dataset(gv.KEY_PROCESSED))
-        self.gb_display_switch.layout().addWidget(self.gb_display_switch.btn_processed)
-        self.rpanel.layout().addWidget(self.gb_display_switch)
-
-        label_pipeline = QtWidgets.QLabel('Processing pipeline')
-        label_pipeline.setStyleSheet('font-weight:bold;')
-        self.rpanel.layout().addWidget(label_pipeline)
-        sep_line = QtWidgets.QFrame()
-        sep_line.setFrameShape(QtWidgets.QFrame.HLine)
-        sep_line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.rpanel.layout().addWidget(sep_line)
-
-        ########
-        # 1. Import image sequence
+        # Import image sequence
         self.gb_import = QtWidgets.QGroupBox('1. Import image sequence')
         self.gb_import.setLayout(QtWidgets.QVBoxLayout())
+        self.rpanel.layout().addWidget(self.gb_import)
+
         self.gb_import.btn_import = QtWidgets.QPushButton('Import...')
         self.gb_import.btn_import.clicked.connect(file_handling.import_file)
         self.gb_import.layout().addWidget(self.gb_import.btn_import)
-        self.rpanel.layout().addWidget(self.gb_import)
+
+        ########
+        # Set ROI
+        self.gb_roi = QtWidgets.QGroupBox('2. Set ROI')
+        self.gb_roi.setLayout(QtWidgets.QGridLayout())
+        self.rpanel.layout().addWidget(self.gb_roi)
+
+        self.gb_roi.le_roi_data = QtWidgets.QLineEdit('')
+        self.gb_roi.le_roi_data.setEnabled(False)
+        self.gb_roi.layout().addWidget(self.gb_roi.le_roi_data, 0, 0, 1, 2)
+        # X length
+        self.gb_roi.layout().addWidget(QLabel('X-length'), 1, 0)
+        self.gb_roi.dsp_xlen = QtWidgets.QDoubleSpinBox()
+        self.gb_roi.dsp_xlen.setMinimum(1.)
+        self.gb_roi.dsp_xlen.setMaximum(10**10)
+        self.gb_roi.dsp_xlen.setSingleStep(0.1)
+        self.gb_roi.dsp_xlen.valueChanged.connect(lambda: self.update_roi_len_params('x'))
+        self.gb_roi.layout().addWidget(self.gb_roi.dsp_xlen, 1, 1)
+        # Y length
+        self.gb_roi.layout().addWidget(QLabel('Y-length'), 2, 0)
+        self.gb_roi.dsp_ylen = QtWidgets.QDoubleSpinBox()
+        self.gb_roi.dsp_ylen.setMinimum(1.)
+        self.gb_roi.dsp_ylen.setMaximum(10**10)
+        self.gb_roi.dsp_ylen.setSingleStep(0.1)
+        self.gb_roi.dsp_ylen.valueChanged.connect(lambda: self.update_roi_len_params('y'))
+        self.gb_roi.layout().addWidget(self.gb_roi.dsp_ylen, 2, 1)
 
         ########
         # Filter ROI contents
-        self.gb_filter = QtWidgets.QGroupBox('2. Filter ROI contents')
+        self.gb_filter = QtWidgets.QGroupBox('3. Filter ROI contents')
         self.gb_filter.setLayout(QtWidgets.QGridLayout())
+        self.rpanel.layout().addWidget(self.gb_filter)
+
         # Segment length
         self.gb_filter.seg_len = QtWidgets.QSpinBox()
         self.gb_filter.seg_len.setMinimum(10)
@@ -150,11 +190,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gb_filter.btn_run = QtWidgets.QPushButton('Run filter')
         self.gb_filter.btn_run.clicked.connect(self.run_roi_filter)
         self.gb_filter.layout().addWidget(self.gb_filter.btn_run, 2, 0, 1, 2)
-        self.rpanel.layout().addWidget(self.gb_filter)
 
         ########
         # Particle detection
-        self.gb_detection = QtWidgets.QGroupBox('3. Particle detection')
+        self.gb_detection = QtWidgets.QGroupBox('4. Particle detection')
         self.gb_detection.setLayout(QtWidgets.QGridLayout())
         # Invert
         self.gb_detection.layout().addWidget(QtWidgets.QLabel('Black-on-white'), 0, 0)
@@ -183,7 +222,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         ########
         # Particle tracking
-        self.gb_tracking = QtWidgets.QGroupBox('4. Trace particles')
+        self.gb_tracking = QtWidgets.QGroupBox('5. Trace particles')
         self.gb_tracking.setLayout(QtWidgets.QGridLayout())
         # Search range
         self.gb_tracking.layout().addWidget(QtWidgets.QLabel('Search range'), 0, 0)
@@ -205,22 +244,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gb_tracking.layout().addWidget(self.gb_tracking.btn_run, 3, 0, 1, 2)
         self.rpanel.layout().addWidget(self.gb_tracking)
 
-        ########
-        # Trace sorting
-        self.gb_sorting = QtWidgets.QGroupBox('5. Particle tracking')
-        self.gb_sorting.setLayout(QtWidgets.QGridLayout())
-        # Toggle sorting
-        self.gb_sorting.layout().addWidget(QtWidgets.QLabel('Toggle sorting'), 0, 0)
-        self.gb_sorting.toggle_sorting = QtWidgets.QCheckBox()
-        self.gb_sorting.toggle_sorting.setChecked(False)
-        self.gb_sorting.toggle_sorting.clicked.connect(self.start_particle_id_sorting)
-        self.gb_sorting.layout().addWidget(self.gb_sorting.toggle_sorting, 0, 1)
-        self.rpanel.layout().addWidget(self.gb_sorting)
-        # Save
-        self.gb_sorting.btn_save = QtWidgets.QPushButton('Save')
-        self.gb_sorting.btn_save.clicked.connect(self.save_particle_id_sorting)
-        self.gb_sorting.btn_save.setEnabled(False)
-        self.gb_sorting.layout().addWidget(self.gb_sorting.btn_save, 3, 0, 1, 2)
+        # ########
+        # # Trace sorting
+        # self.gb_sorting = QtWidgets.QGroupBox('6. Particle tracking')
+        # self.gb_sorting.setLayout(QtWidgets.QGridLayout())
+        # # Toggle sorting
+        # self.gb_sorting.layout().addWidget(QtWidgets.QLabel('Toggle sorting'), 0, 0)
+        # self.gb_sorting.toggle_sorting = QtWidgets.QCheckBox()
+        # self.gb_sorting.toggle_sorting.setChecked(False)
+        # self.gb_sorting.toggle_sorting.clicked.connect(self.start_particle_id_sorting)
+        # self.gb_sorting.layout().addWidget(self.gb_sorting.toggle_sorting, 0, 1)
+        # self.rpanel.layout().addWidget(self.gb_sorting)
+        # # Save
+        # self.gb_sorting.btn_save = QtWidgets.QPushButton('Save')
+        # self.gb_sorting.btn_save.clicked.connect(self.save_particle_id_sorting)
+        # self.gb_sorting.btn_save.setEnabled(False)
+        # self.gb_sorting.layout().addWidget(self.gb_sorting.btn_save, 3, 0, 1, 2)
         # Attrs
         self.particle_id_map: dict = None
         self.particle_labels = dict()
@@ -230,7 +269,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rpanel.layout().addItem(vSpacer)
 
         # Add statusbar
-        gv.statusbar = Statusbar(self.queue)
+        gv.statusbar = Statusbar()
         self.setStatusBar(gv.statusbar)
 
         self.show()
@@ -238,11 +277,26 @@ class MainWindow(QtWidgets.QMainWindow):
 ################
 # UI
 
+    def update_roi_len_params(self, dim):
+        if 'x' in dim:
+            _xlen = gv.w.gb_roi.dsp_xlen.value()
+            gv.h5f.attrs[gv.KEY_ATTR_ROI_XLEN] = _xlen
+        if 'y' in dim:
+            _ylen = gv.w.gb_roi.dsp_ylen.value()
+            gv.h5f.attrs[gv.KEY_ATTR_ROI_YLEN] = _ylen
+
     def detection_diameter_validator(self, value):
         value = value + 1 if value % 2 == 0 else value
         self.gb_detection.spn_diameter.setValue(value)
 
     def update_ui(self):
+
+        if gv.KEY_ATTR_ROI_XLEN in gv.h5f.attrs:
+            self.gb_roi.dsp_xlen.setValue(gv.h5f.attrs[gv.KEY_ATTR_ROI_XLEN])
+
+        if gv.KEY_ATTR_ROI_YLEN in gv.h5f.attrs:
+            self.gb_roi.dsp_ylen.setValue(gv.h5f.attrs[gv.KEY_ATTR_ROI_YLEN])
+
         if gv.KEY_ATTR_FILT_SEGLEN in gv.h5f.attrs:
             self.gb_filter.seg_len.setValue(gv.h5f.attrs[gv.KEY_ATTR_FILT_SEGLEN])
 
@@ -264,10 +318,25 @@ class MainWindow(QtWidgets.QMainWindow):
         if gv.KEY_ATTR_TRACK_SMEM in gv.h5f.attrs:
             self.gb_tracking.spn_smemory.setValue(gv.h5f.attrs[gv.KEY_ATTR_TRACK_SMEM])
 
-        self.cb_phase_select.clear()
-        self.cb_phase_select.addItems(sorted(gv.h5f.file.keys()))
+        # Update phases
+        self.wdgt_phases.cb_phases.clear()
+        phase_list = list(gv.h5f.file.keys())
+        phase_list.sort(key=util.natural_keys)
+        self.wdgt_phases.cb_phases.addItems(phase_list)
 
-        self.gb_display_switch.setEnabled(gv.dset is not None)
+    def change_current_phase(self, i):
+        old_idx = self.wdgt_phases.cb_phases.currentIndex()
+        max_idx = self.wdgt_phases.cb_phases.count() - 1
+        new_idx = old_idx + i
+
+        # Check limits
+        if new_idx < 0:
+            new_idx = 0
+        elif new_idx > max_idx:
+            new_idx = max_idx
+
+        # Change selection
+        self.wdgt_phases.cb_phases.setCurrentIndex(new_idx)
 
     def set_title(self, sub=None):
         sub = ' - {}'.format(sub) if not(sub is None) else ''
@@ -275,36 +344,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def set_group(self, group_name):
         print(f'Set group to {group_name}')
+        if not(bool(group_name)):
+            return
         gv.h5f = gv.h5f.file[group_name]
         file_handling.open_trackpy()
         self.viewer.group_updated()
         self.viewer.update_roi_display()
-
-################
-# THREADING
-
-    def start_thread(self, thread_class, *args, **kwargs):
-        # Redirect stdout
-        self._stdout = sys.stdout
-        #sys.stdout = self.custom_stdout
-
-        self.stdout_timer = QtCore.QTimer()
-        self.stdout_timer.timeout.connect(gv.statusbar.write_custom_stdout)
-        #self.stdout_timer.start(100)
-
-        print('Start thread')
-        self.thread = thread_class(*args, **kwargs)
-        self.thread.finished.connect(self.terminate_thread)
-        self.thread.start()
-
-    def terminate_thread(self):
-        # Re-route stdout
-        sys.stdout = self._stdout
-
-        self.stdout_timer.stop()
-
-        self.thread.terminate()
-
 
     @staticmethod
     def get_particle_color(particle_id, order):
@@ -339,6 +384,64 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return int(particle_id)
 
+    def run_pipeline(self, group_names: list):
+
+        filter_params = dict()
+        filter_params['roi_xlen'] = gv.h5f.attrs[gv.KEY_ATTR_ROI_XLEN]
+        filter_params['roi_ylen'] = gv.h5f.attrs[gv.KEY_ATTR_ROI_YLEN]
+        filter_params['roi_pos'] = gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_POS]
+        filter_params['roi_size'] = gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_SIZE]
+        filter_params['seg_len'] = self.gb_filter.seg_len.value()
+        filter_params['med_range'] = self.gb_filter.med_range.value()
+
+        filter_params['detect_invert'] = self.gb_detection.check_invert.isChecked()
+        filter_params['detect_diameter'] = self.gb_detection.spn_diameter.value()
+        filter_params['detect_minmass'] = self.gb_detection.spn_minmass.value()
+
+        filter_params['track_srange'] = self.gb_tracking.spn_srange.value()
+        filter_params['track_smemory'] = self.gb_tracking.spn_smemory.value()
+
+
+        print('Run pipeline')
+        for name in group_names:
+            print(f'For group {name}')
+            self.wdgt_phases.cb_phases.setCurrentText(name)
+            gv.app.processEvents()
+
+            # Set ROI
+            self.gb_roi.dsp_xlen.setValue(filter_params['roi_xlen'])
+            self.gb_roi.dsp_ylen.setValue(filter_params['roi_ylen'])
+            self.viewer.rect_roi.setPos(filter_params['roi_pos'])
+            self.viewer.rect_roi.setSize(filter_params['roi_size'])
+            self.gb_filter.seg_len.setValue(filter_params['seg_len'])
+            self.gb_filter.med_range.setValue(filter_params['med_range'])
+            # Run
+            #self.gb_filter.btn_run.clicked.emit()
+            self.run_roi_filter()
+
+            # Set detection
+            self.gb_detection.check_invert.setCheckState(filter_params['detect_invert'])
+            self.gb_detection.spn_diameter.setValue(filter_params['detect_diameter'])
+            self.gb_detection.spn_minmass.setValue(filter_params['detect_minmass'])
+            # Run
+            #self.gb_detection.btn_run.clicked.emit()
+            self.run_particle_detection(overwrite=True)
+
+            # Set tracking
+            self.gb_tracking.spn_srange.setValue(filter_params['track_srange'])
+            self.gb_tracking.spn_smemory.setValue(filter_params['track_smemory'])
+            # Run
+            #self.gb_tracking.btn_run.clicked.emit()
+            self.run_particle_tracking()
+
+    def run_current_phase(self):
+        phases = [self.wdgt_phases.cb_phases.currentText()]
+        self.run_pipeline(phases)
+
+    def run_all_phases(self):
+        phases = [self.wdgt_phases.cb_phases.itemText(i) for i in range(self.wdgt_phases.cb_phases.count())]
+        self.run_pipeline(phases)
+
 ################
 # UPDATE PLOT
 
@@ -363,7 +466,7 @@ class MainWindow(QtWidgets.QMainWindow):
         frame_idx = self.viewer.slider.value()
 
         # Display past particles
-        particle_trace_max = 10
+        particle_trace_max = 5
         spots = list()
         for i in range(1, particle_trace_max):
             idx = frame_idx-i
@@ -424,7 +527,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def run_roi_filter(self):
 
         # Fetch ROI coordinates
-        data = gv.h5f[gv.KEY_ORIGINAL][self.viewer.slider.value(),:,:]#self.viewer.get_image()
+        data = gv.h5f[gv.KEY_ORIGINAL][self.viewer.slider.value(),:,:]
         img = self.viewer.original_item
         im, coords = self.viewer.rect_roi.getArrayRegion(data, img, returnMappedCoords=True)
         coords = coords.astype(int)
@@ -439,10 +542,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # Run
         median_subtraction.run(seg_length, med_range, coords)
 
+        # Set roi size and pos for comparison (later)
+        roi = self.viewer.rect_roi
+        gv.h5f[gv.KEY_PROCESSED].attrs[gv.KEY_ATTR_FILT_ROI_POS] = [roi.pos().x(), roi.pos().y()]
+        gv.h5f[gv.KEY_PROCESSED].attrs[gv.KEY_ATTR_FILT_ROI_SIZE] = [roi.size().x(), roi.size().y()]
+
+
 ################
 # DETECTION
 
-    def run_particle_detection(self):
+    def run_particle_detection(self, overwrite=False):
         print('Run particle detection')
 
         invert = self.gb_detection.check_invert.isChecked()
@@ -457,19 +566,21 @@ class MainWindow(QtWidgets.QMainWindow):
         print(f'Diameter {diameter}')
         print(f'Minmass {minmass}')
 
-        trackpy_filepath = file_handling.get_trackpy_path()#f'{gv.filepath}.{gv.EXT_TRACKPY}'
+        trackpy_filepath = file_handling.get_trackpy_path()
         mode = 'a'
         # If detection file exists, ask if should be removed
         if os.path.exists(trackpy_filepath):
-            confirm_dialog = QtWidgets.QMessageBox.question(
-                gv.w, 'Overwrite?',
-                'Previous particle detection exists. Overwrite?',
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel,
-                QtWidgets.QMessageBox.No)
 
-            if confirm_dialog \
-                    in [QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.Cancel]:
-                return
+            if not(overwrite):
+                confirm_dialog = QtWidgets.QMessageBox.question(
+                    gv.w, 'Overwrite?',
+                    'Previous particle detection exists. Overwrite?',
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel,
+                    QtWidgets.QMessageBox.No)
+
+                if confirm_dialog \
+                        in [QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.Cancel]:
+                    return
 
             print('Remove previous detection file')
             if gv.tpf is not None:
@@ -477,9 +588,18 @@ class MainWindow(QtWidgets.QMainWindow):
             gv.tpf = None
             mode = 'w'
 
+        # Disable window
+        gv.statusbar.showMessage('Run particle detection')
+        gv.w.setEnabled(False)
+        gv.app.processEvents()
+
         # Run detection
         with tp.PandasHDFStoreBig(trackpy_filepath, mode=mode) as s:
             tp.batch(gv.h5f[gv.KEY_PROCESSED], diameter, invert=invert, minmass=minmass, output=s, processes='auto')
+
+        # Enable window
+        gv.w.setEnabled(True)
+        gv.statusbar.set_ready()
 
         # Open detection file
         gv.tpf = tp.PandasHDFStoreBig(trackpy_filepath)
@@ -494,12 +614,10 @@ class MainWindow(QtWidgets.QMainWindow):
         gv.h5f.attrs[gv.KEY_ATTR_TRACK_SRANGE] = srange
         gv.h5f.attrs[gv.KEY_ATTR_TRACK_SMEM] = smemory
 
-        #self.start_thread(TrackpyLinker, srange, smemory)
         filepath = file_handling.get_trackpy_path()
         with tp.PandasHDFStoreBig(filepath) as s:
             pred = tp.predict.NearestVelocityPredict(span=5)
             for linked in pred.link_df_iter(s, srange, memory=smemory):
-                #print(str(np.random.randint(1,100)))
                 s.put(linked)
 
 ################
@@ -564,46 +682,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_particle_id = None
 
 
-
-################################
-# THREADING
-
-
-class CustomStdout:
-
-    def __init__(self, queue):
-        self.queue = queue
-
-    def write(self, string):
-        self.queue.put(string)
-
-
-class TrackpyLinker(QtCore.QThread):
-
-    def __init__(self, srange, smemory):
-        QtCore.QThread.__init__(self)
-        self.srange = srange
-        self.smemory = smemory
-
-    def run(self):
-        print('Start TrackpyLinker')
-
-        with tp.PandasHDFStoreBig(f'{gv.filepath}.{gv.EXT_TRACKPY}') as s:
-            pred = tp.predict.NearestVelocityPredict(span=5)
-            for linked in pred.link_df_iter(s, self.srange, memory=self.smemory):
-                #print(str(np.random.randint(1,100)))
-                s.put(linked)
-
-
-
 ################################
 # Statusbar widget
 
 class Statusbar(QtWidgets.QStatusBar):
 
-    def __init__(self, queue):
+    def __init__(self):
         QtWidgets.QStatusBar.__init__(self)
-        self.queue = queue
 
         self.set_ready()
         self.progressbar = QtWidgets.QProgressBar()
@@ -612,14 +697,6 @@ class Statusbar(QtWidgets.QStatusBar):
         self.addPermanentWidget(self.progressbar)
         self.progressbar.hide()
 
-    def write_custom_stdout(self):
-        msg = ''
-        i = 0
-        while not(self.queue.empty()):
-            msg = self.queue.get()
-            i += 1
-
-        self.showMessage(msg)
 
     def start_blocking(self, msg):
         self.setEnabled(False)
@@ -665,8 +742,9 @@ Adapted in part from pyqtgraph's ImageView:
 
 class HDF5ImageView(QtWidgets.QWidget):
 
-    def __init__(self, *args, show_second=False, update_fun=None, **kwargs):
+    def __init__(self, *args, show_second=False, update_fun=None, original_name=None,**kwargs):
         QtWidgets.QWidget.__init__(self, *args, **kwargs)
+        self.original_name = original_name
 
         self.setLayout(QtWidgets.QVBoxLayout())
         self.vwdgt = QtWidgets.QWidget(self)
@@ -674,6 +752,7 @@ class HDF5ImageView(QtWidgets.QWidget):
         self.layout().addWidget(self.vwdgt)
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.layout().addWidget(self.slider)
         if update_fun is None:
             self.slider.valueChanged.connect(self.update_image)
@@ -734,9 +813,9 @@ class HDF5ImageView(QtWidgets.QWidget):
         self.slider.setEnabled(True)
         z_len = gv.h5f[gv.KEY_ORIGINAL].shape[0]-1
         self.slider.setMinimum(0)
+        self.slider.setValue(0)
         self.slider.setMaximum(z_len)
         self.slider.setTickInterval(1//(100/z_len))
-        self.slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.update_image()
 
     def set_rotation(self, dir):
@@ -761,16 +840,14 @@ class HDF5ImageView(QtWidgets.QWidget):
 
     def update_image(self):
 
-        # Original
-        if gv.h5f is None or gv.KEY_ORIGINAL not in gv.h5f:
-            im = np.array([[[0]]])
-        else:
-            im = gv.h5f[gv.KEY_ORIGINAL][self.slider.value(),:,:]
-        self.original_item.setImage(self._rotate(self._flip(im)))
+        original_name = gv.KEY_ORIGINAL if self.original_name is None else self.original_name
 
         # Original
-        # if not(hasattr(self, 'processed_item')):
-        #     return
+        if gv.h5f is None or original_name not in gv.h5f:
+            im = np.array([[[0]]])
+        else:
+            im = gv.h5f[original_name][self.slider.value(),:,:]
+        self.original_item.setImage(self._rotate(self._flip(im)))
 
         if self.processed_item is None:
             return
@@ -782,34 +859,59 @@ class HDF5ImageView(QtWidgets.QWidget):
         self.processed_item.setImage(self._rotate(self._flip(im)))
 
     def update_roi_display(self):
-        if not(hasattr(self, 'rect_roi')):
-            self.rect_roi = pg.RectROI([0,0], [1,1])
-            self.rect_roi.sigRegionChangeFinished.connect(self.update_roi_params)
-            self.original_view.addItem(self.rect_roi)
 
-        if gv.h5f is not None \
-                and gv.KEY_ATTR_FILT_ROI_POS in gv.h5f.attrs \
-                and gv.KEY_ATTR_FILT_ROI_SIZE in gv.h5f.attrs:
+        if hasattr(self, 'rect_roi'):
+            self.original_view.removeItem(self.rect_roi)
+            del self.rect_roi
+
+        if gv.h5f is None:
+            return
+
+        image_size = gv.h5f[gv.KEY_ORIGINAL].shape[1:3]
+
+        self.rect_roi = pg.RectROI([0,0], [1,1],
+                                   pen=pg.mkPen((255, 0, 0)),
+                                   maxBounds=QtCore.QRectF(0, 0, *image_size))
+        self.rect_roi.sigRegionChangeFinished.connect(self.update_roi_params)
+        self.original_view.addItem(self.rect_roi)
+
+        if gv.KEY_ATTR_FILT_ROI_POS in gv.h5f.attrs and gv.KEY_ATTR_FILT_ROI_SIZE in gv.h5f.attrs:
             pos_ = gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_POS]
             size_ = gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_SIZE]
         else:
             pos_ = [0, 0]
-            size_ = [1,1]
-            if gv.h5f is not None:
-                size_ = [gv.h5f[gv.KEY_ORIGINAL].shape[1], gv.h5f[gv.KEY_ORIGINAL].shape[2]]
+            size_ = image_size
 
         self.rect_roi.setPos(pg.Point(pos_))
         self.rect_roi.setSize(pg.Point(size_))
-
 
     @staticmethod
     def update_roi_params(roi: pg.RectROI):
         if gv.h5f is None:
             return
 
-        gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_POS] = [roi.pos().x(), roi.pos().y()]
-        gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_SIZE] = [roi.size().x(), roi.size().y()]
+        _pos = [roi.pos().x(), roi.pos().y()]
+        _size = [roi.size().x(), roi.size().y()]
+        
+        gv.w.gb_roi.le_roi_data.setText('Pos {:.1f}/{:.1f} / Size {:.1f}/{:.1f}'.format(*_pos, *_size))
+        if gv.KEY_PROCESSED in gv.h5f:
+            processed = gv.h5f[gv.KEY_PROCESSED]
+            mark = False
+            if gv.KEY_ATTR_FILT_ROI_POS in processed.attrs and gv.KEY_ATTR_FILT_ROI_SIZE in processed.attrs:
+                _pos_prev = processed.attrs[gv.KEY_ATTR_FILT_ROI_POS]
+                _size_prev = processed.attrs[gv.KEY_ATTR_FILT_ROI_SIZE]
 
+                mark = not(np.all(np.isclose(_pos, _pos_prev)) and np.all(np.isclose(_size, _size_prev)))
+
+            if mark:
+                gv.w.gb_roi.le_roi_data.setStyleSheet('color:#FF0000')
+            else:
+                gv.w.gb_roi.le_roi_data.setStyleSheet('color:#000000')
+
+        gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_POS] = _pos
+        gv.h5f.attrs[gv.KEY_ATTR_FILT_ROI_SIZE] = _size
+
+        gv.w.update_roi_len_params('xy')
 
     def play(self, rate=None):
         """Begin automatically stepping frames forward at the given rate (in fps).
@@ -919,7 +1021,7 @@ class HDF5ImageView(QtWidgets.QWidget):
 ### Main
 
 if __name__ == '__main__':
-    ### Create application
+    # Create application
     gv.app = QtWidgets.QApplication([])
 
     #gvars.open_dir = './testdata'
