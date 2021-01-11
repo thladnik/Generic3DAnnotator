@@ -1,5 +1,5 @@
 import os
-from gv import  EXT_TRACKPY, KEY_ATTR_ROI_XLEN, KEY_ATTR_ROI_YLEN
+from gv import  EXT_TRACKPY, KEY_ATTR_ROI_XLEN, KEY_ATTR_ROI_YLEN, KEY_TIME
 import h5py
 import trackpy as tp
 import pandas as pd
@@ -65,6 +65,11 @@ def read_folder_contents(folder_path):
             df['x'] -= xscale/2
             df['y'] *= yscale
             df['y'] -= yscale/2
+
+            # Add time for coresponding frame idcs
+            for particle, grp in df.groupby('particle'):
+                bvec = (df.particle == particle)
+                df.loc[bvec, 'time'] = gaf_grp['time'][df.loc[bvec, 'frame']]
 
             display_grp = display_h5[phase_name]
 
