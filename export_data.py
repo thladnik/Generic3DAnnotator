@@ -1,5 +1,5 @@
 import os
-from gv import  EXT_TRACKPY, KEY_ATTR_ROI_XLEN, KEY_ATTR_ROI_YLEN, KEY_TIME
+from gv import  EXT_TRACKPY, KEY_ATTR_ROI_XLEN, KEY_ATTR_ROI_YLEN, KEY_ATTR_FILT_ROI_SIZE
 import h5py
 import trackpy as tp
 import pandas as pd
@@ -59,11 +59,12 @@ def read_folder_contents(folder_path):
 
             # Scale position data
             gaf_grp = gaf_h5[phase_name]
+            px_x_scale, px_y_scale = gaf_grp.attrs[KEY_ATTR_FILT_ROI_SIZE]
             xscale = gaf_grp.attrs[KEY_ATTR_ROI_XLEN]
             yscale = gaf_grp.attrs[KEY_ATTR_ROI_YLEN]
-            df['x'] *= xscale
+            df['x'] = xscale/px_x_scale
             df['x'] -= xscale/2
-            df['y'] *= yscale
+            df['y'] *= yscale/px_y_scale
             df['y'] -= yscale/2
 
             # Add time for coresponding frame idcs
