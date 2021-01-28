@@ -9,8 +9,7 @@ from collections.abc import Iterable
 display_parameter_file = 'Display.hdf5'
 gaf_file = 'Camera.gaf'
 
-#base_folder = './data'
-base_folder = '//172.25.250.112/arrenberg_data/shared/Sara_Widera/Ausgewertet'
+base_folder = './data'
 
 def read_store(filepath):
     """Read and return all per-frame entries from trackpy file"""
