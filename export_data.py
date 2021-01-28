@@ -9,7 +9,8 @@ from collections.abc import Iterable
 display_parameter_file = 'Display.hdf5'
 gaf_file = 'Camera.gaf'
 
-base_folder = './data'
+#base_folder = './data'
+base_folder = '//172.25.250.112/arrenberg_data/shared/Sara_Widera/Ausgewertet'
 
 def read_store(filepath):
     """Read and return all per-frame entries from trackpy file"""
@@ -57,20 +58,29 @@ def read_folder_contents(folder_path):
             df['phase_id'] = phase_id
             df['phase_name'] = phase_name
 
+            # Swap x/y, because  trackpy transposes coordinates
+            x = 1 * df.x.values
+            df['x'] = df.y.values
+            df['y'] = x
+
             # Scale position data
             gaf_grp = gaf_h5[phase_name]
             px_x_scale, px_y_scale = gaf_grp.attrs[KEY_ATTR_FILT_ROI_SIZE]
             xscale = gaf_grp.attrs[KEY_ATTR_ROI_XLEN]
             yscale = gaf_grp.attrs[KEY_ATTR_ROI_YLEN]
-            df['x'] = xscale/px_x_scale
+            df['x'] *= xscale / px_x_scale
             df['x'] -= xscale/2
-            df['y'] *= yscale/px_y_scale
+            df['y'] *= yscale / px_y_scale
             df['y'] -= yscale/2
+
+            print(f'Scalex {xscale}/{int(px_x_scale)}, Scaley {yscale}/{int(px_y_scale)}')
+            print(f'Extremes X {df.x.min()}/{df.x.max()}')
+            print(f'Extremes Y {df.y.min()}/{df.y.max()}')
 
             # Add time for coresponding frame idcs
             for particle, grp in df.groupby('particle'):
                 bvec = (df.particle == particle)
-                df.loc[bvec, 'time'] = gaf_grp['time'][df.loc[bvec, 'frame']]
+                df.loc[bvec, 'time'] = gaf_grp['time'][:][df.loc[bvec, 'frame'].values]
 
             display_grp = display_h5[phase_name]
 
