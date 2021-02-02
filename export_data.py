@@ -9,7 +9,8 @@ from collections.abc import Iterable
 display_parameter_file = 'Display.hdf5'
 gaf_file = 'Camera.gaf'
 
-base_folder = './data'
+#base_folder = './data'
+base_folder = '//172.25.250.112/arrenberg_data/shared/Sara_Widera/Ausgewertet/'
 
 def read_store(filepath):
     """Read and return all per-frame entries from trackpy file"""
@@ -67,9 +68,11 @@ def read_folder_contents(folder_path):
             px_x_scale, px_y_scale = gaf_grp.attrs[KEY_ATTR_FILT_ROI_SIZE]
             xscale = gaf_grp.attrs[KEY_ATTR_ROI_XLEN]
             yscale = gaf_grp.attrs[KEY_ATTR_ROI_YLEN]
-            df['x'] *= xscale / px_x_scale
+            df['x'] /= px_x_scale
+            df['x'] *= xscale
             df['x'] -= xscale/2
-            df['y'] *= yscale / px_y_scale
+            df['y'] /= px_y_scale
+            df['y'] *= yscale
             df['y'] -= yscale/2
 
             print(f'Scalex {xscale}/{int(px_x_scale)}, Scaley {yscale}/{int(px_y_scale)}')
@@ -99,6 +102,10 @@ def read_folder_contents(folder_path):
         except Exception as exc:
             print(f'Failed processing {filename} // Exception: {exc}')
 
+        # Debugging:
+        # if len(dfs) >= 20:
+        #     break
+
     # Close files
     gaf_h5.close()
     display_h5.close()
@@ -122,6 +129,9 @@ if __name__ == '__main__':
 
         if df is not None:
             dfs.append(df)
+
+        # Debugging:
+        # break
 
     # Concat all
     Df = pd.concat(dfs)
